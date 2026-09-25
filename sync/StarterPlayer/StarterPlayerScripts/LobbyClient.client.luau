@@ -137,6 +137,8 @@ UserInputService.InputBegan:Connect(function(input, processed)
 		shop:close()
 	elseif page.rewardsOpen then
 		page:closeRewards()
+	elseif page.creditsOpen then
+		page:closeCredits()
 	elseif page.listOpen then
 		page:closeList()
 	elseif page.joinView.Visible then

@@ -204,7 +204,14 @@ local BAR_W = math.floor(CONTENT_W * 0.75 + 0.5)
 -- rather than inside it: a button among readouts reads as one more readout.
 local FREE_GAP = 24
 local FREE_X = PAGE_M + BAR_W + FREE_GAP
-local FREE_W = CONTENT_W - BAR_W - FREE_GAP
+-- THE CREDITS BUTTON, at the row's right edge (2026-09-25, owner: "Add a (i)
+-- looking button on the right side of reward, so i can put my credits"). The
+-- bar's full height, like everything else in the header row, and narrow
+-- because it carries one glyph -- a footnote to FREE REWARDS, not a rival.
+local INFO_W = 52
+local INFO_GAP = 12
+local INFO_X = PAGE_M + CONTENT_W - INFO_W
+local FREE_W = CONTENT_W - BAR_W - FREE_GAP - INFO_GAP - INFO_W
 -- The balance readout, in the gap between the name field (which ends at 728)
 -- and the brand. Right-aligned against the brand rather than left-aligned off
 -- the name, so a five-digit balance grows away from the field it would
@@ -2198,6 +2205,110 @@ local function buildRewardsPanel(self: any, parent: Instance)
 	table.insert(self.rewardSprings, self.claimButton:FindFirstChildOfClass("UIScale"))
 end
 
+-- --------------------------------------------------------------- credits ---
+--
+-- THE CREDITS SHEET, and it is not decoration: it is where the licences this
+-- game is built on are honoured. OpenFront's AGPL additional terms require
+-- "© OpenFront and Contributors" somewhere reasonably visible; the AGPL itself
+-- asks for the licence, the absence of warranty and how to get the source. See
+-- LICENSING.md at the repo root.
+--
+-- NO URLS, ON PURPOSE. Roblox forbids off-platform links anywhere in an
+-- experience except the Social Links on its page, so the source is pointed to
+-- by way of those rather than spelled out.
+--
+-- Same modal furniture as FREE REWARDS -- shade, panel, corner X, backdrop
+-- press to close, the same open and shut curves -- so it is the same piece of
+-- furniture with different words on it.
+local CR_W, CR_H = 760, 380
+
+-- One line per entry, each one line tall, so every line of a kind renders at
+-- one size. A wrapped paragraph under TextScaled picks its own size per box,
+-- and three paragraphs would come out at three different sizes.
+local CR_LINES: { { y: number, h: number, color: Color3, bold: boolean, text: string } } = {
+	{ y = 104, h = 14, color = GOLD, bold = true, text = "BASED ON OPENFRONT" },
+	{ y = 126, h = 22, color = INK, bold = true, text = "© OpenFront and Contributors" },
+	{ y = 154, h = 16, color = INK_DIM, bold = false, text = "Modified by Bunni Games" },
+
+	{ y = 196, h = 14, color = GOLD, bold = true, text = "LICENSE" },
+	{ y = 218, h = 16, color = INK_DIM, bold = false, text = "This game's code is free software, licensed under the GNU Affero" },
+	{ y = 242, h = 16, color = INK_DIM, bold = false, text = "General Public License v3 (AGPL). You may copy, modify and share it" },
+	{ y = 266, h = 16, color = INK_DIM, bold = false, text = "under that license. It comes with NO WARRANTY." },
+	{ y = 298, h = 16, color = INK, bold = false, text = "The full license and source code are available through the" },
+	{ y = 322, h = 16, color = INK, bold = false, text = "community links on this game's page." },
+}
+
+local function buildCreditsPanel(self: any, parent: Instance)
+	local shade = Instance.new("ImageButton")
+	shade.Name = "CreditsShade"
+	shade.Image = ""
+	shade.AutoButtonColor = false
+	shade.Size = UDim2.fromScale(1, 1)
+	shade.BackgroundColor3 = Color3.fromRGB(4, 6, 11)
+	shade.BackgroundTransparency = 1
+	shade.BorderSizePixel = 0
+	shade.Visible = false
+	shade.ZIndex = 20
+	shade.Parent = parent
+	self.creditsShade = shade
+
+	local frost = Instance.new("ImageLabel")
+	frost.Name = "Frost"
+	frost.BackgroundTransparency = 1
+	frost.Image = KIT_SCRIM
+	frost.ScaleType = Enum.ScaleType.Stretch
+	frost.ImageTransparency = 0.72
+	frost.Size = UDim2.fromScale(1, 1)
+	frost.ZIndex = 0
+	frost.Parent = shade
+
+	local panel = Instance.new("Frame")
+	panel.Name = "CreditsPanel"
+	panel.BackgroundColor3 = PANEL
+	panel.BackgroundTransparency = 0.02
+	panel.BorderSizePixel = 0
+	panel.Active = true
+	place(panel, REF_W, REF_H, (REF_W - CR_W) / 2, (REF_H - CR_H) / 2, CR_W, CR_H)
+	panel.Parent = shade
+	local pc = Instance.new("UICorner")
+	pc.CornerRadius = UDim.new(0, 12)
+	pc.Parent = panel
+	self.creditsScale = grower(panel)
+	local ps = Instance.new("UIStroke")
+	ps.Color = LINE
+	ps.Thickness = 1.6
+	ps.Transparency = 0.25
+	ps.Parent = panel
+	local pscrim = Instance.new("ImageLabel")
+	pscrim.Name = "Scrim"
+	pscrim.BackgroundTransparency = 1
+	pscrim.Image = KIT_SCRIM
+	pscrim.ScaleType = Enum.ScaleType.Stretch
+	pscrim.ImageTransparency = 0.3
+	pscrim.Size = UDim2.fromScale(1, 1)
+	pscrim.ZIndex = 0
+	pscrim.Parent = panel
+	roundOff(pscrim, 12)
+
+	kitSet(kitLabel(panel, "CreditsTitle", CR_W, CR_H, 0, 34, CR_W, 46, GOLD), "CREDITS")
+
+	for i, line in CR_LINES do
+		setText(label(panel, "Line" .. i, CR_W, CR_H, 40, line.y, CR_W - 80, line.h, line.color,
+			Enum.TextXAlignment.Center, if line.bold then FONT_BOLD else FONT_UI), line.text)
+	end
+
+	local close = pillButton(panel, "Close", CR_W, CR_H,
+		CR_W - 16 - RW_CLOSE, 16, RW_CLOSE, RW_CLOSE, "X", RED, RED_LINE, POP_BACK)
+	close.Activated:Connect(function()
+		LobbyUI.closeCredits(self)
+	end)
+
+	shade.Activated:Connect(function()
+		popPress(POP_BACK)
+		LobbyUI.closeCredits(self)
+	end)
+end
+
 local function buildListPanel(self: any, parent: Instance)
 	-- `Active`, so a press that misses the sheet cannot reach a card under it.
 	local shade = Instance.new("Frame")
@@ -2520,6 +2631,7 @@ function LobbyUI.new(parent: Instance, myUserId: number): LobbyUI
 	-- A page that lit its own button would be a page that hands out the skin.
 	self.rewardReady = false
 	self.rewardsOpen = false
+	self.creditsOpen = false
 	-- Whether this account has already taken the one grant. The SERVER owns
 	-- it (Data.freeReward) and pushes it down beside the patterns; nothing
 	-- here ever sets it from a press. nil until that push has landed, which
@@ -2649,12 +2761,28 @@ function LobbyUI.new(parent: Instance, myUserId: number): LobbyUI
 	-- box.
 	self.rewardsButton = pillButton(root, "FreeRewards", REF_W, REF_H,
 		FREE_X, BAR_Y, FREE_W, BAR_H, "FREE REWARDS", FREE_FILL, FREE_LINE)
+	-- The gift is 46 rather than 52 and sits tighter to the edge since the
+	-- credits dot took a slice of this pill's width: the caption needed that
+	-- room more than the glyph did.
 	local gift = pixelImage(self.rewardsButton, "Gift", GIFT_ART)
-	place(gift, FREE_W, BAR_H, 14, 13, 52, 52)
+	place(gift, FREE_W, BAR_H, 12, 16, 46, 46)
 	local rewardsCap = self.rewardsButton:FindFirstChild("Caption") :: TextLabel
-	place(rewardsCap, FREE_W, BAR_H, 74, (BAR_H - 20) / 2, FREE_W - 88, 20)
+	place(rewardsCap, FREE_W, BAR_H, 64, (BAR_H - 20) / 2, FREE_W - 72, 20)
 	self.rewardsButton.Activated:Connect(function()
 		LobbyUI.openRewards(self)
+	end)
+
+	-- ----------------------------------------------------------- credits --
+	-- The same dark pill every neutral button here is, same 10px corners,
+	-- and as tall as the bar and FREE REWARDS beside it (owner, 2026-09-25:
+	-- "it doesnt have to be a square, it can be rectangular to fill the
+	-- space").
+	self.creditsButton = pillButton(root, "Credits", REF_W, REF_H,
+		INFO_X, BAR_Y, INFO_W, BAR_H, "i")
+	local infoCap = self.creditsButton:FindFirstChild("Caption") :: TextLabel
+	place(infoCap, INFO_W, BAR_H, 0, (BAR_H - 34) / 2, INFO_W, 34)
+	self.creditsButton.Activated:Connect(function()
+		LobbyUI.openCredits(self)
 	end)
 
 	-- ------------------------------------------------------------ nation --
@@ -2915,6 +3043,7 @@ function LobbyUI.new(parent: Instance, myUserId: number): LobbyUI
 	-- for the moment before the sheet closes.
 	buildListPanel(self, root)
 	buildRewardsPanel(self, root)
+	buildCreditsPanel(self, root)
 	buildRoomPanel(self, root)
 
 
@@ -3349,6 +3478,33 @@ function LobbyUI.closeRewards(self: LobbyUI)
 	task.delay(0.12, function()
 		if not self.rewardsOpen then
 			self.rewardShade.Visible = false
+		end
+	end)
+end
+
+-- --------------------------------------------------------------- credits ---
+
+-- The rewards sheet's arrival, minus the row sweep: this sheet has nothing
+-- that springs, only words.
+function LobbyUI.openCredits(self: LobbyUI)
+	self.creditsOpen = true
+	self.creditsShade.BackgroundTransparency = 1
+	self.creditsScale.Scale = RW_PANEL_FROM
+	self.creditsShade.Visible = true
+	tween(self.creditsShade, RW_OPEN_SHADE, { BackgroundTransparency = RW_SHADE_ALPHA })
+	tween(self.creditsScale, RW_OPEN_PANEL, { Scale = 1 })
+end
+
+function LobbyUI.closeCredits(self: LobbyUI)
+	if not self.creditsOpen then
+		return
+	end
+	self.creditsOpen = false
+	tween(self.creditsShade, RW_SHUT, { BackgroundTransparency = 1 })
+	tween(self.creditsScale, RW_SHUT, { Scale = RW_PANEL_FROM })
+	task.delay(0.12, function()
+		if not self.creditsOpen then
+			self.creditsShade.Visible = false
 		end
 	end)
 end
