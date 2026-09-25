@@ -761,6 +761,23 @@ end
 -- Nukes.stepSams reloads against, and the same rule Units.inCooldown states.
 local SAM_COOLDOWN = Config.SAM_COOLDOWN or 90
 
+-- A BUILDING'S RELOAD FOR ITS OWNER (2026-09-25, owner: "a gamepass for 2x
+-- reload for all my buildings"). `base` is the kind's cooldown in ticks; an
+-- empire holding the FAST_RELOAD pass carries `reloadMult` (ConquestServer's
+-- applyPattern writes it) and waits that fraction of it. Read against the
+-- CURRENT owner on every tick, so a captured building reloads at its new
+-- owner's pace from then on. Every rearm step and every bar goes through here.
+local function cooldown(sim: any, u: Unit, base: number): number
+	local p = sim.players[u.ownerId]
+	local mult = p and p.reloadMult
+	if mult == nil or mult <= 0 or mult >= 1 then
+		return base
+	end
+	return math.max(1, math.ceil(base * mult))
+end
+
+Units.cooldown = cooldown
+
 local function reloadLeft(sim: any, u: Unit): number?
 	-- AN AIRFIELD REARMS LIKE A SILO (2026-09-21): one sortie, then
 	-- Config.AIRSTRIKE_COOLDOWN ticks with the bar drawn over the chip. Its
@@ -770,7 +787,7 @@ local function reloadLeft(sim: any, u: Unit): number?
 		if front == nil then
 			return nil
 		end
-		local remaining = (Config.AIRSTRIKE_COOLDOWN or 600) - (sim.tick - front)
+		local remaining = cooldown(sim, u, Config.AIRSTRIKE_COOLDOWN or 600) - (sim.tick - front)
 		return remaining > 0 and remaining or nil
 	end
 	-- THE RAILGUN RELOADS THE SAME WAY (2026-09-24), off its own cooldown.
@@ -779,7 +796,7 @@ local function reloadLeft(sim: any, u: Unit): number?
 		if front == nil then
 			return nil
 		end
-		local remaining = (Config.RAILGUN_COOLDOWN or 250) - (sim.tick - front)
+		local remaining = cooldown(sim, u, Config.RAILGUN_COOLDOWN or 250) - (sim.tick - front)
 		return remaining > 0 and remaining or nil
 	end
 	-- A BATTERY RELOADS BETWEEN BARRAGES (owner, 2026-09-22: "i want artillery
@@ -816,18 +833,28 @@ local function reloadLeft(sim: any, u: Unit): number?
 	if front == nil then
 		return nil
 	end
-	local remaining = SAM_COOLDOWN - (sim.tick - front)
+	local remaining = cooldown(sim, u, SAM_COOLDOWN) - (sim.tick - front)
 	return remaining > 0 and remaining or nil
 end
 
 Units.reloadLeft = reloadLeft
 
 -- THE FULL LENGTH of the reload `rl` counts down, in ticks, and only where the
--- client cannot know it: a battery's per-shot gap. Nil on every other kind (the
--- client's setReload falls back to the kind's constant) and on a gun at rest.
+-- client cannot know it: a battery's per-shot gap, or (2026-09-25) a
+-- FAST_RELOAD holder's shortened one. Nil everywhere else (the client's
+-- setReload falls back to the kind's constant) and on a gun at rest.
 local function reloadTotal(sim: any, u: Unit): number?
 	if u.utype ~= Units.ARTILLERY then
-		return nil
+		local base = if u.utype == Units.AIRFIELD
+			then (Config.AIRSTRIKE_COOLDOWN or 600)
+			elseif u.utype == Units.RAILGUN then (Config.RAILGUN_COOLDOWN or 250)
+			elseif u.utype == Units.SAM_LAUNCHER then SAM_COOLDOWN
+			else nil
+		if base == nil then
+			return nil
+		end
+		local full = cooldown(sim, u, base)
+		return if full ~= base then full else nil
 	end
 	local e = u.ext
 	if e == nil or e.reloadUntil == nil or e.reloadUntil <= sim.tick then

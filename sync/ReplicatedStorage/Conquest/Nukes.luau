@@ -2310,7 +2310,7 @@ local function stepSilos(sim: any)
 		local s = list[i]
 		if s.active and not s.underConstruction then
 			local front = s.missileTimers[1]
-			if front ~= nil and CFG.SILO_COOLDOWN - (tick - front) <= 0 then
+			if front ~= nil and Units.cooldown(sim, s, CFG.SILO_COOLDOWN) - (tick - front) <= 0 then
 				Units.reload(sim, s)
 			end
 		end
@@ -2350,7 +2350,7 @@ local function stepSams(sim: any)
 
 			while #sam.missileTimers > 0 do
 				local front = sam.missileTimers[1]
-				if CFG.SAM_COOLDOWN - (tick - front) > 0 then
+				if Units.cooldown(sim, sam, CFG.SAM_COOLDOWN) - (tick - front) > 0 then
 					break
 				end
 				Units.reload(sim, sam)

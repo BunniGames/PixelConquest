@@ -207,6 +207,10 @@ export type Player = {
 	-- The same for gold: fraction added to per-tick gold income while wearing
 	-- a pattern that carries one. Written and cleared beside growthBoost.
 	goldBoost: number?,
+	-- THE FAST_RELOAD PASS (2026-09-25): the fraction of every building
+	-- reload this empire waits (Config.FAST_RELOAD_MULT), read by
+	-- Units.cooldown. Written and cleared beside growthBoost; nil for bots.
+	reloadMult: number?,
 	-- A BOT PRETENDING TO BE A PERSON: one of the phantom seats a lobby card
 	-- promised, wearing a real display name (ConquestServer's faux block,
 	-- Tutorial.addFaux). Stamped once by addPlayer from its `faux` argument,

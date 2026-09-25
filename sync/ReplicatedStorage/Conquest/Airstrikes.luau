@@ -273,7 +273,7 @@ function Airstrikes.step(sim: any)
 		for _, u in fields do
 			if u.active and not u.underConstruction then
 				local front = u.missileTimers[1]
-				if front ~= nil and cd - (tick - front) <= 0 then
+				if front ~= nil and Units.cooldown(sim, u, cd) - (tick - front) <= 0 then
 					Units.reload(sim, u)
 				end
 			end

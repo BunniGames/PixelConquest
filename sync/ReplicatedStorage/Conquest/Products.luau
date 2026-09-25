@@ -289,6 +289,21 @@ local PASSES: { [string]: Entry } = {
 		perks = { "SCATTERSHOT CARD", "4-6 EXTRA WARHEADS" },
 		money = 40000,
 	},
+	-- 2X RELOAD (2026-09-25, owner: "a gamepass for 2x reload for all my
+	-- buildings"). Pure capability, no grant: a holder's airfields, railguns,
+	-- batteries, anti-nuke towers and silos all rearm in half the time
+	-- (Config.FAST_RELOAD_MULT, applied in Units.cooldown). Reaches the sim
+	-- through ConquestServer.applyPattern off the ConquestPass_FAST_RELOAD
+	-- attribute, like VIP's growth. ARMED 2026-09-25 with the owner's id.
+	FAST_RELOAD = {
+		key = "FAST_RELOAD",
+		kind = "pass",
+		id = 1998782486, -- 29 R$, on sale (checked 2026-09-25)
+		name = "2x Reload Speed",
+		blurb = "Every building you own reloads twice as fast.",
+		robux = 29,
+		perks = { "2X RELOAD SPEED", "ALL BUILDINGS" },
+	},
 }
 
 -- =============================================================== products ==
@@ -666,12 +681,12 @@ Products.DEV_PRODUCTS = DEV_PRODUCTS
 -- ADVANCED are sold from the room panel's locked dials instead); the in-game
 -- "+" card sells only the extra-buildings passes ("Only these 3 should show up
 -- for the + one in the game"). A key with no live id is skipped by the page.
-Products.LOBBY_PASSES = { "VIP", "ARTILLERY", "AIRSTRIKE", "MEGANUKE", "BARRACKS", "SCATTERSHOT", "RAILGUN" } :: { string }
+Products.LOBBY_PASSES = { "VIP", "ARTILLERY", "AIRSTRIKE", "MEGANUKE", "BARRACKS", "SCATTERSHOT", "RAILGUN", "FAST_RELOAD" } :: { string }
 -- CHEAPEST FIRST (owner, 2026-09-22: "orient them in order of least to most
 -- expensive"): the page's order is its Money prices, sorted here so a price
 -- change re-orders the page by itself; a pass with no Money price goes last.
 Products.PLUS_PASSES = (function(): { string }
-	local keys = { "ARTILLERY", "AIRSTRIKE", "MEGANUKE", "BARRACKS", "RAILGUN", "SCATTERSHOT" }
+	local keys = { "ARTILLERY", "AIRSTRIKE", "MEGANUKE", "BARRACKS", "RAILGUN", "SCATTERSHOT", "FAST_RELOAD" }
 	table.sort(keys, function(a: string, b: string): boolean
 		local pa = if type(PASSES[a].money) == "number" then PASSES[a].money else math.huge
 		local pb = if type(PASSES[b].money) == "number" then PASSES[b].money else math.huge

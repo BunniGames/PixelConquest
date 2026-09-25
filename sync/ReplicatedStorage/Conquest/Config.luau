@@ -1126,6 +1126,13 @@ Config.TOPUP_UPTO_MEDIUM = 500000
 -- than a wall. It rides Sim's existing growthBoost term, so the army CEILING
 -- never moves: the men arrive sooner, there are never more of them.
 Config.VIP_GROWTH_BOOST = 0.10
+
+-- THE FAST_RELOAD PASS (2026-09-25, owner: "a gamepass for 2x reload for all
+-- my buildings"). The fraction of every building reload a holder waits:
+-- airfield, railgun, artillery battery, anti-nuke tower and missile silo, via
+-- Units.cooldown. 0.5 is "2x". Not the barracks' REINFORCE_COOLDOWN -- that
+-- is a rail card's clock, not a building's.
+Config.FAST_RELOAD_MULT = 0.5
 -- Paid ONCE per account, the first time a server sees the pass on it, and
 -- latched in the profile (ConquestData.creditVip) because pass ownership is
 -- true on every join for the rest of that account's life.

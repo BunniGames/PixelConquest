@@ -211,7 +211,8 @@ end
 local function gap(sim: any, u: any, rng: Random, cdMin: number, cdMax: number): number
 	local p = sim.players[u.ownerId]
 	local mult = (p ~= nil and p.isBot) and (Config.BOT_ARTILLERY_COOLDOWN_MULT or 1) or 1
-	return math.floor(rng:NextInteger(cdMin, cdMax) * mult)
+	-- ...and a FAST_RELOAD holder's fires faster (2026-09-25; Units.cooldown).
+	return Units.cooldown(sim, u, math.floor(rng:NextInteger(cdMin, cdMax) * mult))
 end
 
 -- THE REARM BAR (owner, 2026-09-22: "i want artillery to have a rearm bar as

@@ -26,6 +26,7 @@ local Nukes = require(Shared.Nukes)
 -- The airfield's sorties (2026-09-21): one intent, validated there.
 local Airstrikes = require(Shared.Airstrikes)
 local Units = require(Shared.Units)
+local Products = require(Shared.Products)
 -- DIPLOMACY (2026-09-18). The upstream port that sat unwired until the owner
 -- asked for an alliance system. This file is its only server caller: the
 -- intent handler files requests, stepDiplomacy runs its clock and tells the
@@ -304,12 +305,15 @@ local function applyPattern(player: Player): boolean
 	local vip = if player:GetAttribute("ConquestVip") == true then Config.VIP_GROWTH_BOOST else 0
 	local growth = Patterns.boost(idx) + vip
 	local gold = Patterns.goldBoost(idx)
+	-- ...and the FAST_RELOAD pass (2026-09-25), which lands the same late way
+	-- VIP does and so rides the same idempotent re-run (watchVip below).
+	local reload = if Monetization.holdsPass(player, "FAST_RELOAD") then Config.FAST_RELOAD_MULT else nil
 	-- THE EARLY RETURN HAS TO TEST ALL THREE, not just the index, and that is
 	-- not a tidy-up: VIP is confirmed by a web call that lands AFTER the
 	-- profile does, so the second call for a VIP wearing no pattern moves the
 	-- boost while the index sits still at 1. An index-only test returned false
 	-- there and dropped the entire +10% on the floor.
-	if p.pattern == idx and p.growthBoost == growth and p.goldBoost == gold then
+	if p.pattern == idx and p.growthBoost == growth and p.goldBoost == gold and p.reloadMult == reload then
 		return false
 	end
 	p.pattern = idx
@@ -319,6 +323,7 @@ local function applyPattern(player: Player): boolean
 	-- Checker is not, and there is no third field to get out of step.
 	p.growthBoost = growth
 	p.goldBoost = gold
+	p.reloadMult = reload
 	return true
 end
 
@@ -1546,7 +1551,7 @@ local function offerSkipRearm(player: Player, p: any, fromTile: number, rail: bo
 		total = Config.RAILGUN_BUILD_TICKS or 150
 	else
 		left = Units.reloadLeft(sim, u)
-		total = if rail then (Config.RAILGUN_COOLDOWN or 250) else (Config.AIRSTRIKE_COOLDOWN or 600)
+		total = Units.cooldown(sim, u, if rail then (Config.RAILGUN_COOLDOWN or 250) else (Config.AIRSTRIKE_COOLDOWN or 600))
 	end
 	if left == nil or left <= 0 or total - left >= total * Config.SKIP_REARM_OFFER_BELOW then
 		return
@@ -2667,6 +2672,7 @@ Players.PlayerRemoving:Connect(function(player)
 		p.isBot = true
 		p.growthBoost = nil
 		p.goldBoost = nil
+		p.reloadMult = nil
 	end
 	lastIntent[player.UserId] = nil
 	lastHello[player.UserId] = nil
@@ -3624,6 +3630,11 @@ local function watchVip(player: Player)
 		if applyPattern(player) then
 			StateRE:FireAllClients("roster", roster())
 		end
+	end)
+	-- The FAST_RELOAD pass settles the same way (2026-09-25); the empire's
+	-- reloadMult is not on the roster, so there is nothing to repaint.
+	player:GetAttributeChangedSignal(Products.PASS_ATTR .. "FAST_RELOAD"):Connect(function()
+		applyPattern(player)
 	end)
 end
 for _, player in Players:GetPlayers() do
