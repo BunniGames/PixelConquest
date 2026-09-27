@@ -125,6 +125,9 @@ export type Opts = {
 	hthink: number,
 	collapse: number?,
 	collapseShare: number?,
+	-- Overrides Config.ROUND_PACE for this sim only (pace=), so a before and
+	-- after can run on one server without a Config edit between them.
+	pace: number?,
 	-- False when the caller pinned the count with bots=. True means runMatch
 	-- derives it from the map, exactly as the live server does.
 	autoBots: boolean?,
@@ -197,6 +200,9 @@ local function runMatch(o: Opts): { [string]: any }
 			math.floor(sim.playableLand / math.max(1, o.humans + o.bots) * o.collapseShare))
 	end
 	local collapseTiles = sim.collapseTiles
+	if o.pace then
+		sim.roundPace = o.pace
+	end
 
 	sim.phase = "spawn"
 	sim.phaseTick = 0
@@ -555,6 +561,7 @@ local HELP = {
 	"  seed=101 minutes=30 hthink=3  match controls",
 	"  collapseshare=0.16            absorb bar as a share of ONE empire's fair land",
 	"  collapse=9051                 ...or as a flat tile count",
+	"  pace=1                        troop-growth pace (default Config.ROUND_PACE)",
 	"  slice=30                      ms of work between yields; lower is politer",
 	"  /simulate stop                abort the run in progress",
 }
@@ -593,6 +600,7 @@ local function parse(text: string)
 		spread = nil :: string?,
 		collapse = nil :: number?,
 		collapseShare = nil :: number?,
+		pace = nil :: number?,
 	}
 	for word in text:gmatch("%S+") do
 		local lower = string.lower(word)
@@ -621,6 +629,8 @@ local function parse(text: string)
 				o.collapse = num
 			elseif k == "collapseshare" then
 				o.collapseShare = num
+			elseif k == "pace" then
+				o.pace = num
 			end
 		elseif tonumber(lower) then
 			o.matches = math.floor(tonumber(lower) :: number)
@@ -727,6 +737,7 @@ local function run(text: string)
 			hthink = o.hthink,
 			collapse = o.collapse,
 			collapseShare = o.collapseShare,
+			pace = o.pace,
 		})
 		table.insert(results, r)
 		reportMatch(r)

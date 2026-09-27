@@ -1445,6 +1445,20 @@ local function tickRooms()
 
 			if beat then
 				commitRoom(code, function(r)
+					-- A CLAIM NOBODY FINISHED (2026-09-25). The claimant's
+					-- server died between claim and "ready", or its ready /
+					-- reopen write failed. The only other stale-steal lives in
+					-- claimRoom, which is reached through START or the public
+					-- clock -- and both only fire on an OPEN room, so nothing
+					-- ever retried it, while this very heartbeat kept the
+					-- record alive. Everyone sat on STARTING until they left.
+					-- Hand it back open: the host can press START again and a
+					-- public room's passed deadline starts it on the next poll.
+					if r.state == "claim" and (os.time() - (r.claimedAt or 0)) > PrivateLobby.CLAIM_STALE then
+						r.state = "open"
+						r.hostServer = ""
+						r.claimedAt = 0
+					end
 					local entry = PrivateLobby.entryFor(r, SERVER_ID)
 					if not entry then
 						-- Our entry is GONE while we still hold members: a
@@ -1990,8 +2004,7 @@ _G.ConquestSpawnCard = function(player: Player, mapId: string, modeId: string): 
 				-- the table only ever held a cold-start default, so reading it
 				-- here would quietly shrink a 24-seat extra to six.
 				local slotCap = r.size or (Matchmaker.SLOTS[r.slot] or slot).cap
-				local mapCap = tonumber((Maps.get(mapId) :: any).MAX_EMPIRES)
-				r.cap = if mapCap then math.min(slotCap, mapCap) else slotCap
+				r.cap = Matchmaker.cardCap(mapId, slotCap)
 				minted = r
 				return true
 			end)

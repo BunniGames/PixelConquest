@@ -353,6 +353,9 @@ function Sim.new(mapId: string, seed: number, modeId: string?)
 		-- is the whole of "same tag, same side", and it is per-round because a
 		-- round is a new Sim.
 		teamByTag = {} :: { [string]: number },
+		-- The team the first faux seat landed on; every later faux seat joins
+		-- it. See addPlayer. nil until a faux player is added.
+		fauxTeam = nil :: number?,
 		teamSizes = {} :: { [number]: number },
 		teamAnchors = {} :: { [number]: number },
 
@@ -681,6 +684,16 @@ function Sim.addPlayer(
 			best = self.teamByTag[tag]
 		end
 
+		-- EVERY FAUX SEAT ON ONE SIDE (owner, 2026-09-25: "ensure these ais
+		-- are always on the same team"). Works exactly like a clan tag: the
+		-- first faux seat takes the least-populated side, and every faux seat
+		-- after it is placed with it. ConquestServer adds every human before
+		-- any faux seat, so that first pick lands on the side with the fewest
+		-- people, and mid-round joiners then fill the other sides.
+		if faux == true and self.fauxTeam ~= nil then
+			best = self.fauxTeam
+		end
+
 		if best == nil then
 			-- Least-populated team, ties to the lowest index. The server adds
 			-- every human before any bot each round, so this spreads the
@@ -702,6 +715,9 @@ function Sim.addPlayer(
 		self.teamSizes[team] = (self.teamSizes[team] or 0) + 1
 		if tag ~= nil and tag ~= "" then
 			self.teamByTag[tag] = team
+		end
+		if faux == true then
+			self.fauxTeam = team
 		end
 	end
 
@@ -5624,6 +5640,11 @@ function Sim.step(self: Sim)
 				-- Defaults to 1 when unset, so a Sim built the old way is
 				-- bit-for-bit what it was.
 				growth *= tier.GROWTH_SCALE * (self.incomePace or 1) * buff
+				-- ...and the GLOBAL pace (owner, 2026-09-25: rounds "about 10%
+				-- longer"). Every empire, every map, bots included, so no
+				-- matchup moves -- the whole round just fills in slower.
+				-- `roundPace` on the sim overrides it for /simulate's pace=.
+				growth *= self.roundPace or Config.ROUND_PACE or 1
 				-- A FAUX PLAYER GROWS SLOWER THAN ITS TIER (owner, 2026-09-21:
 				-- "nerf ai posing as player npcs troop spawn rate by 40%"). It
 				-- is a TIER_NATION bot, so until now it earned at a nation's

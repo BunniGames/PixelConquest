@@ -1777,6 +1777,14 @@ Config.SCATTERSHOT_SPREAD_MAX = 46
 -- Observed matches are 9-24 min, but observed is not guaranteed. If the round
 -- rotation cannot hold a 75-minute lobby, put 1800 back HERE and label it a
 -- deliberate Roblox-side deviation rather than pretending the port is literal.
+-- ROUNDS ~10% LONGER (owner, 2026-09-25: "artificially make rounds last about
+-- 10% longer"). A multiplier on EVERY empire's troop growth (Sim's income
+-- loop, beside incomePace): land is bought with troops, so slower income is a
+-- slower map without touching a single combat constant or the win bar. 0.91
+-- aimed at +10%; the /simulate before/after is the measurement, not this
+-- comment. 1 puts it back.
+Config.ROUND_PACE = 0.91
+
 Config.WIN_PERCENT_FFA = 0.90
 Config.WIN_PERCENT_TEAM = 0.90
 Config.OVERTIME_ENABLED = true

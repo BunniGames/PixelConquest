@@ -201,7 +201,9 @@ local PASSES: { [string]: Entry } = {
 		-- MONEY PRICES CUT TO A FIFTH across the "+" page (owner, 2026-09-22:
 		-- "make everything cost 5x less money in that shop"): 250k -> 50k,
 		-- 1M -> 200k, 100k -> 20k, 200k -> 40k. The Robux prices are the site's.
-		money = 50000,
+		-- HALVED AGAIN 2026-09-25 (owner: "reduce the Money cost of everything
+		-- by 2x"): every Money price on this page, now 1,250 Money a Robux.
+		money = 25000,
 	},
 	AIRSTRIKE = {
 		key = "AIRSTRIKE",
@@ -213,7 +215,7 @@ local PASSES: { [string]: Entry } = {
 		robux = 320,
 		perks = { "AIR STRIKES", "+5,000 MONEY" },
 		grant = { money = 5000 },
-		money = 200000,
+		money = 100000,
 	},
 	-- THE MEGA NUKE (2026-09-22, owner: "i also added a mega nuke gamepass
 	-- 1989902339"). The site: "Mega Nuke", 32 R$, "Nuke 4X Damage" -- the
@@ -241,7 +243,7 @@ local PASSES: { [string]: Entry } = {
 		blurb = "Adds the MEGA NUKE card to your rail: its own warhead, four times a nuke's blast area.",
 		robux = 32,
 		perks = { "MEGA NUKE CARD", "4X BLAST AREA" },
-		money = 20000,
+		money = 10000,
 	},
 	-- NOT FOR SALE on the site as of 2026-09-22 (IsForSale false, no price).
 	-- The shop reads that off the site and draws the card as SOON until the
@@ -258,13 +260,14 @@ local PASSES: { [string]: Entry } = {
 		-- FOR MONEY (owner, 2026-09-22: "reinforcements can be tho"). The site
 		-- has no Robux price for it yet, so today this is the only way in: the
 		-- Robux pill says SOON and the Money pill sells it.
-		money = 40000,
+		money = 20000,
 	},
 	-- THE LATE-GAME PAIR (owner, 2026-09-24: "scattershot: 1999838282 railgun:
 	-- 1998602304", the day both weapons shipped). Site: "Railgun Bundle" 800 R$
 	-- and "Scattershot Bundle" 64 R$, both on sale, no descriptions -- so, like
 	-- the mega nuke, pure capability and no grant. Money prices on the page's
-	-- measured 625 Money a Robux (MEGANUKE 32 R$ = 20k, AIRSTRIKE 320 = 200k).
+	-- measured 625 Money a Robux (MEGANUKE 32 R$ = 20k, AIRSTRIKE 320 = 200k),
+	-- halved 2026-09-25 to 1,250 a Robux (see ARTILLERY).
 	-- `art` is a StarterGui.Images entry holding the rail's pixel icon until the
 	-- owner drops a shop render on it.
 	RAILGUN = {
@@ -276,7 +279,7 @@ local PASSES: { [string]: Entry } = {
 		blurb = "Adds the RAILGUN: tap it, then tap anywhere on the map to snipe a building.",
 		robux = 800,
 		perks = { "RAILGUN CARD", "NO RANGE LIMIT" },
-		money = 500000,
+		money = 250000,
 	},
 	SCATTERSHOT = {
 		key = "SCATTERSHOT",
@@ -287,7 +290,7 @@ local PASSES: { [string]: Entry } = {
 		blurb = "Adds the SCATTERSHOT: a nuke that brings 4-6 smaller warheads with it.",
 		robux = 64,
 		perks = { "SCATTERSHOT CARD", "4-6 EXTRA WARHEADS" },
-		money = 40000,
+		money = 20000,
 	},
 	-- 2X RELOAD (2026-09-25, owner: "a gamepass for 2x reload for all my
 	-- buildings"). Pure capability, no grant: a holder's airfields, railguns,
@@ -741,9 +744,13 @@ end
 --                                          nuke and the battery)
 --     ARTILLERY     80 R$  ->    250,000   (~75 hours)
 --     AIR STRIKE   320 R$  ->  1,000,000   (~300 hours)
+-- SUPERSEDED: cut to a fifth on 2026-09-22 and halved again on 2026-09-25
+-- (see ARTILLERY), so today every pass is 1,250 Money a Robux -- MEGA NUKE
+-- 10k, BARRACKS 20k, SCATTERSHOT 20k, ARTILLERY 25k, AIR STRIKE 100k,
+-- RAILGUN 250k. The `money` field on each pass is the truth.
 -- A pass that pays Money on top (its `grant`) still pays it to a Money buyer
 -- -- the card lists it, so the buyer gets what the card says -- which is a
--- 5,000 rebate on a 50,000 price, and priced in.
+-- 5,000 rebate on a 25,000 price, and priced in.
 function Products.moneyPrice(key: string): number?
 	local entry = PASSES[key]
 	if entry == nil or type(entry.money) ~= "number" or entry.money <= 0 then

@@ -1794,7 +1794,11 @@ local function startRound(forceMap: string?, forceMode: string?, opts: any?)
 	-- phantom ceiling) does not bind it. Past the nine cleared friends the
 	-- draw hands out invented crowd identities; see Faces.
 	local mapFaux = tonumber((Maps.get(mapId :: string) :: any).FAUX)
-	if mapFaux and not tutorial and not scenario then
+	-- FREE-FOR-ALL ONLY. Every faux seat lands on one side (Sim.addPlayer's
+	-- fauxTeam), so 66 of them in a private team room would be one AI side
+	-- against the humans. Public Eurasia cards are FFA-only (EurasiaMap.MODES);
+	-- a private team room on the map gets no map faux at all.
+	if mapFaux and not tutorial and not scenario and Modes.teams(modeId) <= 0 then
 		fauxCount = math.clamp(mapFaux, 0, botCount)
 	end
 	if fauxCount > 0 then
@@ -1975,7 +1979,9 @@ IntentRE.OnServerEvent:Connect(function(player, payload)
 		-- LOBBY page could fire this and teleport itself to another public server
 		-- of the place, abandoning any queued board seat without going through
 		-- leaveAll. Self-inflicted, but it is not a thing the lobby offers.
-		if IS_MATCH and sim ~= nil then
+		-- NOT GATED ON `sim` (2026-09-25): a match whose round failed to boot
+		-- has no sim, and LEAVE is exactly the button its players need.
+		if IS_MATCH then
 			leaveToLobby(player)
 		end
 		return
@@ -2730,6 +2736,44 @@ if IS_MATCH then
 	end)
 end
 
+-- A TELEPORT THAT FAILS AFTER IT STARTED (2026-09-25). TeleportAsync only
+-- throws for a request it refuses outright; Flooded / GameFull / Unauthorized
+-- and friends arrive later, here -- and nothing on a match server listened
+-- (MatchmakerServer's handler returns early on a match). So `leaving` stayed
+-- set and the LEAVE button died, and `returning` stayed latched and a whole
+-- finished match sat on a dead server. Now the person is un-latched and
+-- retried on their own with backoff; after TELEPORT_RETRIES the group latch
+-- is dropped too, so the 12 s end-of-round timer tries everyone again.
+local TELEPORT_RETRIES = 4
+local teleportAttempts: { [number]: number } = {}
+if IS_MATCH then
+	TeleportService.TeleportInitFailed:Connect(function(player, result, message)
+		local uid = player.UserId
+		warn(string.format("[Conquest] teleport failed for %d: %s %s", uid, tostring(result), tostring(message)))
+		Analytics.hopCancelled(player)
+		leaving[uid] = nil
+		local n = (teleportAttempts[uid] or 0) + 1
+		teleportAttempts[uid] = n
+		if n > TELEPORT_RETRIES then
+			teleportAttempts[uid] = nil
+			returning = false
+			return
+		end
+		-- Only a player who was on their way OUT is retried: one who pressed
+		-- LEAVE, or anyone once the round is over. 2, 4, 8, 16 s.
+		if returning or (sim ~= nil and sim.phase == "ended") or sim == nil then
+			task.delay(2 ^ n, function()
+				if player.Parent ~= nil then
+					leaveToLobby(player)
+				end
+			end)
+		end
+	end)
+	Players.PlayerRemoving:Connect(function(player)
+		teleportAttempts[player.UserId] = nil
+	end)
+end
+
 -- WHERE THIS SERVER'S PEOPLE ARE, for a friend who presses JOIN on one of them.
 -- The platform cannot put anybody into a reserved server, so the lobby they
 -- land in finishes the join off this record (MatchmakerServer.followFriend):
@@ -2852,6 +2896,18 @@ local function bootMatch()
 	-- applies keeps the figure equal to the empires that will wear a face.
 	-- Only the COUNT changes; the wait still ends when the real roster lands.
 	local phantoms = math.clamp(tonumber(cfg and cfg.phantoms) or 0, 0, FAUX_MAX)
+	-- ...and a map that states its own FAUX (Eurasia) seats that many, past
+	-- FAUX_MAX, exactly as startRound does -- or a "66 / 72" card would land
+	-- on a curtain reading "1 / 7".
+	local cfgMap = cfg and cfg.map
+	local cfgMode = cfg and cfg.mode
+	local mapFaux = if type(cfgMap) == "string" and Maps.exists(cfgMap)
+		then tonumber((Maps.get(cfgMap) :: any).FAUX)
+		else nil
+	if mapFaux and not (cfg and cfg.tutorial) and not Modes.isHistorical(cfgMode or "")
+		and Modes.teams(cfgMode) <= 0 then
+		phantoms = mapFaux
+	end
 	local t0 = os.clock()
 	while os.clock() - t0 < Matchmaker.BOARD_GRACE do
 		local here = #Players:GetPlayers()
@@ -2873,7 +2929,28 @@ local function bootMatch()
 
 	-- The whole record goes in as `opts`: a public match's has none of the
 	-- private fields and every dial reads absent, which is the default.
-	startRound(cfg and cfg.map or nil, cfg and cfg.mode or nil, cfg)
+	--
+	-- A ROUND THAT FAILS TO BOOT MUST NOT STRAND ANYONE (2026-09-25). A throw
+	-- here used to leave `sim` nil, "go" unsent and everyone on the curtain.
+	-- Retry once on the ordinary rotation; if that throws too, send everybody
+	-- back to the page.
+	local okStart, errStart = pcall(startRound, cfg and cfg.map or nil, cfg and cfg.mode or nil, cfg)
+	if not okStart then
+		warn("[Conquest] startRound failed, retrying on the rotation: " .. tostring(errStart))
+		local okRetry, errRetry = pcall(startRound)
+		if not okRetry then
+			warn("[Conquest] startRound failed again, returning everyone: " .. tostring(errRetry))
+			sim = nil
+			-- No round means no 12 s end-of-round timer to retry a failed
+			-- teleport, so this loop is that timer.
+			while #Players:GetPlayers() > 0 do
+				returnToLobby()
+				task.wait(12)
+				returning = false
+			end
+			return
+		end
+	end
 	-- "go" comes AFTER the round exists, not before. `startRound` generates
 	-- the map and sends every client its init; dismissing the intro first drops
 	-- the player onto a blank desk for as long as all of that takes.
@@ -3137,7 +3214,7 @@ local function stepDiplomacy()
 	end
 end
 
-RunService.Heartbeat:Connect(function(dt)
+local function serverTick(dt: number)
 	if not sim then
 		return
 	end
@@ -3358,8 +3435,10 @@ RunService.Heartbeat:Connect(function(dt)
 		end
 	end
 
+	-- False/true tells the Heartbeat below whether this frame actually stepped
+	-- the sim: only a frame that did can vouch that the round is healthy.
 	if steps == 0 then
-		return
+		return false
 	end
 
 	-- The time the SIMULATION advanced, not the frame's. Both timers below
@@ -3582,6 +3661,45 @@ RunService.Heartbeat:Connect(function(dt)
 	else
 		endedTimer = 0
 		endedSettled = false
+	end
+	return true
+end
+
+-- THE TICK IS PROTECTED (2026-09-25). An error in serverTick used to repeat
+-- every frame -- the connection survives, the round does not -- so the match
+-- never reached "ended" and nobody was ever sent home. Now each frame is
+-- pcall'd; a failure is warned at most once every 5 s, and a round that has
+-- been failing for TICK_FAIL_BAIL seconds straight is abandoned: a match
+-- server sends everyone back to the page, a Studio session just keeps warning.
+--
+-- ONLY A FRAME THAT STEPPED CLEARS THE ALARM (2026-09-25). The sim ticks at
+-- 10 Hz against a 60 Hz Heartbeat, so five frames in six run no step and
+-- return early. They used to count as successes and reset the clock, which
+-- meant a sim:step that threw on EVERY tick never failed for ten seconds
+-- "straight" and the bail never fired -- the round sat unfinished forever.
+local TICK_FAIL_BAIL = 10
+local tickFailingSince = 0
+local tickLastWarn = 0
+RunService.Heartbeat:Connect(function(dt)
+	local ok, err = pcall(serverTick, dt)
+	if ok then
+		if err == true then
+			tickFailingSince = 0
+		end
+		return
+	end
+	local now = os.clock()
+	if tickFailingSince == 0 then
+		tickFailingSince = now
+	end
+	if now - tickLastWarn >= 5 then
+		tickLastWarn = now
+		warn("[Conquest] server tick failed: " .. tostring(err))
+	end
+	if IS_MATCH and now - tickFailingSince >= TICK_FAIL_BAIL then
+		-- Latches, and unlatches itself on a failed teleport, so calling it
+		-- every frame is one teleport attempt, not sixty.
+		returnToLobby()
 	end
 end)
 

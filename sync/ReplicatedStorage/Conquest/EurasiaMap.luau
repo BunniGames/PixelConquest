@@ -24,7 +24,17 @@ EurasiaMap.MIN_LANDMASS = 45
 -- AI empires on this map that pose as players (a name and a face), stated
 -- outright instead of taken from the lobby card's phantom seats. A share of
 -- the roster's bots, never added to it. See specs.py.
-EurasiaMap.FAUX = 60
+EurasiaMap.FAUX = 66
+
+-- THE PUBLIC CARD IS ALWAYS 72 SEATS WITH THE FAUX ALREADY IN THEM (owner,
+-- 2026-09-25): a Eurasia card reads "66 / 72" empty, so at most six real
+-- people ever queue into one. Real players never displace a faux seat -- the
+-- 72-empire roster is 66 faux + the humans + plain AI for whatever is left.
+-- Matchmaker.cardCap / Matchmaker.phantoms read these; private rooms do not.
+EurasiaMap.CARD_SEATS = 72
+
+-- Public cards may only pair this map with these modes. See Matchmaker.mapAllows.
+EurasiaMap.MODES = { "ffa" }
 
 -- Mountain ranges in map pixel space: s = peak strength, w = gaussian falloff
 -- in px, p = flat x,y polyline. Elevation is synthesised from distance to these.

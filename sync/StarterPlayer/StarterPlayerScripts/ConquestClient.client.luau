@@ -1346,7 +1346,8 @@ StateRE.OnClientEvent:Connect(function(kind, payload, extra)
 		elseif payload.reason == "nonation" then
 			msg = "That land belongs to no nation"
 		elseif payload.reason == "toomanyfronts" then
-			msg = "Too many fronts - press X to pull one back"
+			-- No key: the cancel intent is gone and X now arms the scattershot.
+			msg = "Too many fronts - push one you have or wait for one to end"
 		-- Nobody may be attacked for the first few seconds of the round. Open
 		-- land is never immune, so this only ever fires on a tap at a NATION,
 		-- and saying so is the difference between "the game is protecting a

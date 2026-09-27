@@ -574,11 +574,21 @@ end
 -- SERVER-ONLY, which is why Scenarios is required here and not at the top:
 -- it pulls in the generated scenario data (WW2Scenario, 42 KB), and this
 -- module is also loaded by the lobby CLIENT, which only decodes the wire.
+-- Whether a public card may pair this map with this mode. A map that states
+-- MODES (Eurasia: FFA only, owner 2026-09-25) is held to that list; every
+-- other map takes any mode.
+function Matchmaker.mapAllows(map: string, mode: string): boolean
+	local list = (Maps.get(map) :: any).MODES
+	return list == nil or table.find(list, mode) ~= nil
+end
+
 function Matchmaker.allPairs(): { { map: string, mode: string } }
 	local out = {}
 	for _, m in Maps.ORDER do
 		for _, g in Modes.ORDER do
-			table.insert(out, { map = m, mode = g })
+			if Matchmaker.mapAllows(m, g) then
+				table.insert(out, { map = m, mode = g })
+			end
 		end
 	end
 	-- Every scenario on a rotation map, whatever its mode (2026-09-24: WW1 on
@@ -586,7 +596,7 @@ function Matchmaker.allPairs(): { { map: string, mode: string } }
 	-- joined 1938 and Korea). Scenarios.pairs is already in a fixed order.
 	local Scenarios = require(script.Parent.Scenarios)
 	for _, p in Scenarios.pairs() do
-		if table.find(Maps.ORDER, p.map) then
+		if table.find(Maps.ORDER, p.map) and Matchmaker.mapAllows(p.map, p.mode) then
 			table.insert(out, p)
 		end
 	end
@@ -625,7 +635,9 @@ function Matchmaker.specialPairs(): { { map: string, mode: string } }
 	local out = {}
 	for _, g in Modes.specialIds() do
 		for _, m in Maps.ORDER do
-			table.insert(out, { map = m, mode = g })
+			if Matchmaker.mapAllows(m, g) then
+				table.insert(out, { map = m, mode = g })
+			end
 		end
 	end
 	return out
@@ -787,6 +799,7 @@ function Matchmaker.newRecord(slotIndex: number, used: { { map: string, mode: st
 			end
 			local m, g = string.match(want.pair, "^(.-)|(.+)$")
 			if m and g and table.find(Maps.ORDER, m) and Modes.exists(g) and not taken[m]
+				and Matchmaker.mapAllows(m, g)
 				and not (Modes.isSpecial(g) and specialUp) then
 				map, mode = m, g
 			end
@@ -800,8 +813,7 @@ function Matchmaker.newRecord(slotIndex: number, used: { { map: string, mode: st
 	-- round makes faux empires only for the phantoms its card advertised. The
 	-- figure already travels the wire -- `wire` writes rec.cap and `readWire`
 	-- reads it back as e[3].
-	local mapCap = Matchmaker.mapCap(map)
-	local cap = if mapCap then math.min(size, mapCap) else size
+	local cap = Matchmaker.cardCap(map, size)
 	idCounter += 1
 	return {
 		-- The id has to be unique across SERVERS, not just within one, because
@@ -851,6 +863,19 @@ function Matchmaker.mapCap(map: string?): number?
 	return tonumber((Maps.get(map) :: any).MAX_EMPIRES)
 end
 
+-- The seats a card on this map advertises, given the rung it was minted at.
+-- A map stating CARD_SEATS (Eurasia, 72) overrides the rung outright -- its
+-- faux seats fill most of it, see `phantoms`. Otherwise the rung, lowered to
+-- the map's MAX_EMPIRES.
+function Matchmaker.cardCap(map: string, size: number): number
+	local seats = tonumber((Maps.get(map) :: any).CARD_SEATS)
+	if seats then
+		return seats
+	end
+	local mapCap = Matchmaker.mapCap(map)
+	return if mapCap then math.min(size, mapCap) else size
+end
+
 -- How many of this lobby's seats are held by nobody. Clamped against the real
 -- roster so the phantoms give way as the card fills rather than pushing it
 -- over its own cap.
@@ -869,6 +894,12 @@ end
 -- card breathes like any other six-seat card. The rule is the cap against the
 -- draw, not the presence of a cap.
 function Matchmaker.phantoms(rec: Record): number
+	-- A CARD_SEATS MAP SHOWS ITS WHOLE FAUX ROSTER (Eurasia: 66 of 72), so the
+	-- card reads as the packed round it launches and leaves six real seats.
+	local mapDef = Maps.get(rec.map) :: any
+	if mapDef.CARD_SEATS and mapDef.FAUX then
+		return math.clamp(mapDef.FAUX, 0, math.max(0, rec.cap - Matchmaker.count(rec)))
+	end
 	local cap = Matchmaker.mapCap(rec.map)
 	if cap ~= nil and cap <= Matchmaker.PHANTOM_MAX then
 		return 0
