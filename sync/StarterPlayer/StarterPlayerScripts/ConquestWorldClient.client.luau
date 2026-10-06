@@ -42,7 +42,7 @@ end)
 -- forward whatever was typed. The first wait is the long one -- by the time
 -- it returns the server script has made all of them, so the rest are a
 -- formality and a short timeout is enough.
-for i, name in { "WorldCommand", "PacificCommand", "NycCommand", "JapanCommand", "MarsCommand", "KoreaCommand", "AfricaCommand", "PhilippinesCommand", "EurasiaCommand", "SpawnCommand" } do
+for i, name in { "WorldCommand", "PacificCommand", "NycCommand", "JapanCommand", "MarsCommand", "KoreaCommand", "AfricaCommand", "PhilippinesCommand", "EurasiaCommand", "UkCommand", "IndiaCommand", "NorthAmericaCommand", "SpawnCommand" } do
 	local command = TextChatService:WaitForChild(name, if i == 1 then 30 else 10) :: TextChatCommand?
 	if command then
 		command.Triggered:Connect(function(_source, text)

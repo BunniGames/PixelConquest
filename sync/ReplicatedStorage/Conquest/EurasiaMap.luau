@@ -24,14 +24,28 @@ EurasiaMap.MIN_LANDMASS = 45
 -- AI empires on this map that pose as players (a name and a face), stated
 -- outright instead of taken from the lobby card's phantom seats. A share of
 -- the roster's bots, never added to it. See specs.py.
-EurasiaMap.FAUX = 66
+-- 60, NOT 66 (2026-09-25): the identity pool behind these seats is 65 deep
+-- (Faces.CROWD's 56 plus the 9 real accounts in Tutorial), sized for 60 with
+-- five spare for a seat that is taken or a mid-round re-deal. At 66 a round
+-- came up a face short and a late-arriving owner/friend kept a faux empire
+-- wearing their own name. Raise it only together with more CROWD rows.
+EurasiaMap.FAUX = 60
 
--- THE PUBLIC CARD IS ALWAYS 72 SEATS WITH THE FAUX ALREADY IN THEM (owner,
--- 2026-09-25): a Eurasia card reads "66 / 72" empty, so at most six real
--- people ever queue into one. Real players never displace a faux seat -- the
--- 72-empire roster is 66 faux + the humans + plain AI for whatever is left.
--- Matchmaker.cardCap / Matchmaker.phantoms read these; private rooms do not.
-EurasiaMap.CARD_SEATS = 72
+-- ...AND IN THE ROUND ITSELF, EVERY AI SEAT IS ONE (owner, 2026-09-25: "for
+-- eurasia, i want the other people to be ai posing as players with realistic
+-- player names"). FAUX above is what the lobby CARD shows; this makes
+-- ConquestServer seat a faux player in every bot slot of the 72-empire roster,
+-- so no grey plain-AI nation appears on this map at all. The crowd in Faces
+-- was grown to cover it (71 faux + spares).
+EurasiaMap.FAUX_FILL = true
+
+-- THE PUBLIC CARD SHOWS THE FAUX ALREADY SEATED (owner, 2026-09-25): a Eurasia
+-- card reads "60 / 66" empty, so at most six real people ever queue into one.
+-- Real players never displace a faux seat -- the map's 72-empire roster is
+-- the faux + the humans + plain AI for whatever is left. Keep CARD_SEATS at
+-- FAUX + 6. Matchmaker.cardCap / Matchmaker.phantoms read these; private
+-- rooms do not.
+EurasiaMap.CARD_SEATS = 66
 
 -- Public cards may only pair this map with these modes. See Matchmaker.mapAllows.
 EurasiaMap.MODES = { "ffa" }

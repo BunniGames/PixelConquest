@@ -53,6 +53,9 @@ local Faces = require(Shared.Faces)
 local Money = require(Shared.Money)
 local Patterns = require(Shared.Patterns)
 local Data = require(script.Parent:WaitForChild("ConquestData"))
+-- RANKED (2026-10-05): the match half of the ladder. Every hook into this
+-- file is one RankedMatch call; outside a ranked round each one is a no-op.
+local RankedMatch = require(script.Parent:WaitForChild("RankedMatch"))
 -- PURCHASES. `Monetization.install()` at the foot of this file has replaced the
 -- bare `Data.install()` that used to sit there -- it calls it underneath, so
 -- the position and its ordering guarantee are unchanged and what is added is a
@@ -162,7 +165,9 @@ end
 -- scaled by Config.FAUX_GROWTH_SCALE in Sim's income pass, so a "player" no
 -- longer out-grows the nations it stands among. Sim.addPlayer stamps `p.faux`
 -- from the last argument of the addPlayer call below; nothing here has to.
-local FAUX_MAX = 6
+-- 24: a 36-seat card draws up to two thirds of its seats as phantoms
+-- (Matchmaker.halfDraw, 2026-09-29), and this ceiling must not undercut it.
+local FAUX_MAX = 24
 -- The middle AI class. A tribe razes what it captures and never builds, which
 -- is not how any person plays; a nation expands, builds cities and ports, and
 -- behaves like the player it is pretending to be.
@@ -353,6 +358,35 @@ local function applyFlag(player: Player): boolean
 	return true
 end
 
+-- CAREER WINS, as the standings board prints them. Read off the LIVE profile,
+-- so it is nil until that profile has loaded (the `Data.onReady` hook re-sends
+-- the roster when it does) and nil for every AI. A faux empire carries a real
+-- user id but has nobody in the room, so it reads nil as well -- the same
+-- blank a real player with no wins yet gets, which keeps LIE #2 intact.
+local function winsOf(uid: number?): number?
+	local plr = (uid ~= nil and uid > 0) and Players:GetPlayerByUserId(uid) or nil
+	local profile = plr and Data.get(plr)
+	local wins = profile and type(profile.stats) == "table" and tonumber(profile.stats.wins)
+	if wins and wins > 0 then
+		return math.floor(wins)
+	end
+	return nil
+end
+
+-- A FAUX PLAYER'S WINS (2026-10-03, owner: "give them a win number between 0
+-- and 5 on the leaderboard too"). Made up, but STABLE: the roster is re-sent
+-- all round, so a count rolled per send would flicker. Hashed off the face's
+-- id and name, so the same identity reads the same count every send and
+-- every round. 0 prints blank, exactly like a real player with no wins yet.
+local function fauxWinsOf(uid: number?, name: string): number?
+	local h = math.abs(uid or 0) % 65521
+	for i = 1, #name do
+		h = (h * 31 + string.byte(name, i)) % 65521
+	end
+	local wins = h % 6
+	return wins > 0 and wins or nil
+end
+
 local function roster()
 	local list = {}
 	for _, id in sim.playerOrder do
@@ -380,13 +414,12 @@ local function roster()
 			if taker and taker ~= p then
 				name, uid = taker.name, taker.userId
 			end
-			-- A PLAIN AI NATION GETS A FACE TOO (owner, 2026-09-25): a random
-			-- rendered avatar dealt by empire id -- see Faces.NPC. Sent on the
-			-- wire only; `p.userId` stays nil, because every "is this a plain
-			-- bot?" rule on the server reads that field.
-			if uid == nil and p.isBot then
-				uid = -(Faces.NPC_BASE + p.id)
-			end
+			-- A PLAIN AI NATION HAS NO FACE (owner, 2026-09-25: "regular ai
+			-- should not have any pfp"). It used to be sent a Faces.NPC avatar
+			-- here as -(NPC_BASE + id); now its `u` stays nil and every client
+			-- draws its lettered badge, which is what tells an AI apart from a
+			-- player (or a faux player, which wears an identity's face). The
+			-- NPC images live on as the faces of the Eurasia crowd rows.
 			table.insert(list, {
 				i = p.id,
 				n = name,
@@ -396,6 +429,14 @@ local function roster()
 				-- on a predrawn map the person holding a nation during the spawn
 				-- phase is `taker`, and theirs is the flag that belongs over it.
 				f = (taker and taker ~= p) and taker.flag or p.flag,
+				-- Career wins, for the standings board's WINS column. Rides
+				-- `uid`, so a claimed nation shows its claimer's count too.
+				w = if fauxIds[p.id] and not (taker and taker ~= p)
+					then fauxWinsOf(uid, name)
+					else winsOf(uid),
+				-- The ranked emblem's index (Ranked.LADDER), in RANKED rounds
+				-- only -- absent everywhere else, so nothing draws.
+				r = RankedMatch.rankOf(uid),
 			})
 		end
 	end
@@ -430,11 +471,13 @@ end
 -- refused: an attack that does nothing because a number was wrong reads to
 -- the player as the attack button being broken.
 local function snapPreset(v: any): number
+	-- Per mode: a ranked round whitelists 25 / 50 / 75 (Config.attackPresets).
+	local fallback = Config.defaultAttackRatio(sim and sim.modeId)
 	if typeof(v) ~= "number" or v ~= v then
-		return Config.DEFAULT_ATTACK_RATIO
+		return fallback
 	end
-	local best, bestD = Config.DEFAULT_ATTACK_RATIO, math.huge
-	for _, preset in Config.ATTACK_PRESETS or { Config.DEFAULT_ATTACK_RATIO } do
+	local best, bestD = fallback, math.huge
+	for _, preset in Config.attackPresets(sim and sim.modeId) do
 		local d = math.abs(preset - v)
 		if d < bestD then
 			best, bestD = preset, d
@@ -609,6 +652,22 @@ local moneyTracker: any = nil
 -- and two of them firing in the same frame is ordinary rather than rare.
 local moneyPaid: { [number]: boolean } = {}
 
+-- 3x MONEY (owner, 2026-09-29), all by USER ID and all cleared each round.
+-- ONE table rather than three locals: this chunk's register budget is shared
+-- with everything below it.
+--   awarded    what this round has paid them so far -- every life, so a
+--              revived player's offer covers both
+--   offered    the bonus the round-end offer promised, kept here so the grant
+--              hook can say how much landed (the grant zeroes the profile's)
+--   prompting  os.clock() of an open MONEY3X prompt; while any is open (up to
+--              MONEY3X_HOLD) the end of round waits to teleport -- see there
+local money3x = {
+	awarded = {} :: { [number]: number },
+	offered = {} :: { [number]: number },
+	prompting = {} :: { [number]: number },
+}
+local MONEY3X_HOLD = 60
+
 -- Settles one player. `partial` is the leave path -- see Money.award for which
 -- terms an unfinished round withholds and why.
 local function settleMoney(plr: Player, partial: boolean?)
@@ -634,6 +693,16 @@ local function settleMoney(plr: Player, partial: boolean?)
 		table.insert(lines, { label = "2x MONEY", value = "", amount = award.total })
 		award.total *= 2
 	end
+	-- 3x MONEY bought with no offer to pay (see the MONEY3X grant): it
+	-- triples THIS payout instead, as its own row, the same shape as 2x above.
+	if award.total > 0 and Data.takeMoney3xToken(plr) then
+		table.insert(lines, { label = "3x MONEY", value = "", amount = award.total * 2 })
+		award.total *= 3
+	end
+	-- A new payout retires the last round's 3x offer, so a late receipt can
+	-- never pay an old round on top of this one -- it becomes a token instead.
+	Data.setMoney3xOffer(plr, 0)
+	money3x.awarded[plr.UserId] = (money3x.awarded[plr.UserId] or 0) + math.max(0, award.total)
 	moneyPaid[plr.UserId] = true
 	-- PLACEMENT, logged here and not at the end of the round, because HERE is
 	-- where it is known exactly -- the tracker settles each empire on the tick
@@ -686,6 +755,96 @@ local function settleMoney(plr: Player, partial: boolean?)
 	})
 end
 
+-- ================================================================ 3x money ==
+--
+-- THE ROUND'S PAY, TRIPLED, FOR ROBUX (owner, 2026-09-29: "add a X3 money
+-- button after the game ends"). Offered once, when the round is WON, to
+-- everyone still here that the round paid something -- the survivors settled
+-- on that tick and the knocked out who stayed to watch. Never mid-round: a
+-- knocked-out player's card already has REVIVE on it, and the owner asked for
+-- the end of the game.
+--
+-- THE OFFER IS THE PROFILE'S, NOT THIS SERVER'S. Twelve seconds after the win
+-- everybody is teleported; a receipt that lands after that lands on a lobby,
+-- which knows nothing about this round. So the bonus is banked on the profile
+-- (released and saved on PlayerRemoving) and the MONEY3X grant pays it from
+-- there, wherever it arrives.
+money3x.offer = function()
+	if not Products.isLive(Products.product("MONEY3X")) then
+		return
+	end
+	for _, plr in Players:GetPlayers() do
+		local earned = money3x.awarded[plr.UserId] or 0
+		if earned > 0 and Data.get(plr) ~= nil then
+			local bonus = earned * 2
+			money3x.offered[plr.UserId] = bonus
+			Data.setMoney3xOffer(plr, bonus)
+			StateRE:FireClient(plr, "money3x", { earned = earned, bonus = bonus })
+		end
+	end
+end
+
+-- The button's press. Only against a live offer, only one prompt at a time,
+-- and only while the round is over -- anything else is a crafted client.
+money3x.prompt = function(player: Player)
+	local uid = player.UserId
+	if sim == nil or sim.phase ~= "ended" or (money3x.offered[uid] or 0) <= 0 then
+		return
+	end
+	if Data.money3xOffer(player) <= 0 then
+		return
+	end
+	local open = money3x.prompting[uid]
+	if open ~= nil and os.clock() - open < MONEY3X_HOLD then
+		return
+	end
+	money3x.prompting[uid] = os.clock()
+	if not Monetization.promptProduct(player, "MONEY3X") then
+		money3x.prompting[uid] = nil
+	end
+end
+
+-- WHETHER THE TELEPORT HOME SHOULD WAIT. A prompt torn down by a teleport
+-- reads as the game taking the button away mid-purchase, so the round holds
+-- while anyone still here has one open -- or has bought and is waiting on the
+-- receipt -- up to MONEY3X_HOLD seconds each, so a prompt left open cannot
+-- keep a server alive.
+money3x.holding = function(): boolean
+	local now = os.clock()
+	for uid, at in money3x.prompting do
+		if now - at < MONEY3X_HOLD and Players:GetPlayerByUserId(uid) ~= nil then
+			return true
+		end
+	end
+	return false
+end
+
+-- Closed without buying: stop holding for them. Bought: keep holding until
+-- the receipt is durable (the onGranted hook below), which is usually a
+-- second or two later.
+game:GetService("MarketplaceService").PromptProductPurchaseFinished:Connect(function(userId, productId, purchased)
+	local entry = Products.product("MONEY3X")
+	if entry ~= nil and productId == entry.id and not purchased then
+		money3x.prompting[userId] = nil
+	end
+end)
+
+Monetization.onGranted(function(player, entry)
+	if entry.key ~= "MONEY3X" then
+		return
+	end
+	local uid = player.UserId
+	money3x.prompting[uid] = nil
+	local bonus = money3x.offered[uid]
+	money3x.offered[uid] = nil
+	if player.Parent == nil or bonus == nil or bonus <= 0 then
+		return
+	end
+	local balance = Data.money(player)
+	Analytics.moneyEarned(player, bonus, balance, "money3x")
+	StateRE:FireClient(player, "money3x", { done = true, bonus = bonus, balance = balance })
+end)
+
 -- ================================================================= revive ==
 --
 -- A KNOCKED-OUT PLAYER BUYS THEIR WAY BACK IN BY TAKING OVER AN AI EMPIRE
@@ -736,6 +895,12 @@ local function canRevive(player: Player): (boolean, string)
 	if tutorialSession ~= nil then
 		return false, "not in the tutorial"
 	end
+	-- RANKED: no revives. A revive takes over an AI empire, and in ranked the
+	-- only AI empires are players who left (owner, 2026-10-05: "I dont want
+	-- ai posing as real players in ranked").
+	if RankedMatch.active() then
+		return false, "not in ranked"
+	end
 	if (revivedThisRound[player.UserId] or 0) >= REVIVE_PER_ROUND then
 		return false, "one revive a round"
 	end
@@ -752,22 +917,34 @@ end
 local function reviveCandidate(): any
 	-- One pass for a maximum, where this used to build a list and sort it: the
 	-- median needed the whole order, the biggest does not.
-	local best: any = nil
+	-- A FAUX EMPIRE IS THE FALLBACK (2026-09-25). Eurasia seats a faux player
+	-- in every AI slot, so there a plain bot never exists -- and a paid revive
+	-- with nothing to take would be money for nothing. A plain bot is still
+	-- always preferred; a faux one is taken only when no plain one qualifies,
+	-- and adoptEmpire strips its costume. To the room it reads as one player
+	-- leaving and another picking up their empire, which real rounds do.
+	local best: any, bestFaux: any = nil, nil
 	for _, id in sim.playerOrder do
 		local q = sim.players[id]
-		if q and q.isBot and q.alive and q.spawned and q.userId == nil
-			and not fauxIds[id] and q.tileCount >= REVIVE_MIN_TILES
+		if q and q.isBot and q.alive and q.spawned and q.tileCount >= REVIVE_MIN_TILES
+			and (q.userId == nil or fauxIds[id])
 		then
 			-- Ties broken by the LOWER id, as the old sort did, so two bots on
 			-- the same tile count cannot make the pick depend on roster order.
-			if best == nil
-				or q.tileCount > best.tileCount
-				or (q.tileCount == best.tileCount and q.id < best.id)
+			local cur = if fauxIds[id] then bestFaux else best
+			if cur == nil
+				or q.tileCount > cur.tileCount
+				or (q.tileCount == cur.tileCount and q.id < cur.id)
 			then
-				best = q
+				if fauxIds[id] then
+					bestFaux = q
+				else
+					best = q
+				end
 			end
 		end
 	end
+	best = best or bestFaux
 	-- nil when every surviving bot is under REVIVE_MIN_TILES, which is what
 	-- offerRevive reads to grey the button out: coming back onto an empire
 	-- already collapsing is not a second chance, however big it is relatively.
@@ -777,11 +954,23 @@ end
 -- What the HUD's button should show: whether one is possible right now, and
 -- how many are already in hand (a token skips the purchase prompt).
 local function offerRevive(player: Player)
+	-- Ranked never offers one (see canRevive), so no button is drawn at all.
+	if RankedMatch.active() then
+		return
+	end
 	local ok = canRevive(player)
 	StateRE:FireClient(player, "revive", {
 		allowed = ok and reviveCandidate() ~= nil,
 		tokens = Data.reviveTokens(player),
 	})
+end
+
+-- The tile at the middle of an empire's land, for the camera to centre on.
+local function empireCentre(q: any): number
+	if q.tileCount > 0 then
+		return math.floor(q.sumY / q.tileCount) * Config.MAP_W + math.floor(q.sumX / q.tileCount)
+	end
+	return q.spawnTile or 0
 end
 
 -- THE HAND-OVER ITSELF, shared by the two ways a person comes to own an empire
@@ -792,9 +981,18 @@ local function adoptEmpire(player: Player, q: any, team: number?)
 	-- row; the user-id lookup is the one thing that moves, and it is what every
 	-- "which empire is this player" question in this file goes through.
 	sim.byUserId[player.UserId] = q.id
+	-- A FAUX EMPIRE TAKES OFF ITS COSTUME (see reviveCandidate): it stops being
+	-- listed as faux, and `p.faux` -- the growth nerf Sim applies to faux
+	-- players -- is cleared, or the person taking it over would grow at 60%.
+	fauxIds[q.id] = nil
+	fauxIdentity[q.id] = nil
+	q.faux = nil
 	q.userId = player.UserId
 	q.name = nationNameFor(player)
 	q.isBot = false
+	-- A hunter AI's discount and its people-safe weapons belong to the AI,
+	-- not to the person taking the empire over.
+	q.aiHunter = nil
 	q.tier = Config.TIER_HUMAN
 	q.killedBy = nil
 	q.lastHitBy = nil
@@ -817,11 +1015,7 @@ local function adoptEmpire(player: Player, q: any, team: number?)
 	-- The player: a fresh init -- their id changed, and so did every "yours"
 	-- on their screen -- then the camera onto the middle of their new land.
 	sendInit(player)
-	local centre = q.spawnTile or 0
-	if q.tileCount > 0 then
-		centre = math.floor(q.sumY / q.tileCount) * Config.MAP_W + math.floor(q.sumX / q.tileCount)
-	end
-	StateRE:FireClient(player, "spawned", { tile = centre })
+	StateRE:FireClient(player, "spawned", { tile = empireCentre(q) })
 	StateRE:FireClient(player, "revive", { allowed = false, tokens = Data.reviveTokens(player) })
 end
 
@@ -874,13 +1068,14 @@ end
 -- A nation over `maxTiles` is passed over while a smaller one exists: a
 -- follower arrives as reinforcements, not as the leading power. `maxTiles` is
 -- math.huge when there is no living friend to measure against.
-local function followCandidate(fx: number, fy: number, maxTiles: number, team: number?, excludeId: number?): any
+local function followCandidate(fx: number, fy: number, maxTiles: number, team: number?, excludeId: number?, allowFaux: boolean?): any
 	local best: any, bestD = nil, math.huge
 	local fallback: any, fallbackD = nil, math.huge
 	for _, id in sim.playerOrder do
 		local q = sim.players[id]
-		if q and q.isBot and q.alive and q.spawned and q.userId == nil
-			and not fauxIds[id] and q.tileCount >= REVIVE_MIN_TILES and q.id ~= excludeId
+		local wearer = if fauxIds[id] then allowFaux == true else q ~= nil and q.userId == nil
+		if q and q.isBot and q.alive and q.spawned and wearer
+			and q.tileCount >= REVIVE_MIN_TILES and q.id ~= excludeId
 			and (sim.teamCount == 0 or sim.teamOf[id] == nil or sim.teamOf[id] == team)
 		then
 			local dx = q.sumX / q.tileCount - fx
@@ -937,12 +1132,40 @@ local function startLiteLesson(player: Player, empireId: number, force: boolean?
 	return true, ""
 end
 
+-- THE SIDE A MID-ROUND ARRIVAL JOINS in a team round, or nil in a free-for-all.
+-- A plain bot is neutral there (Sim.addPlayer), so taking one over puts the
+-- person on no team at all unless a side is handed in -- the same rule
+-- addPlayer gives a person at round start: their clan tag's side if the tag
+-- already has one, otherwise the least-populated side, ties to the lowest.
+local function arrivalTeam(player: Player): number?
+	if sim.teamCount <= 0 then
+		return nil
+	end
+	local tag = tagFor(player)
+	if tag ~= "" and sim.teamByTag[tag] ~= nil then
+		return sim.teamByTag[tag]
+	end
+	local best, bestN = 1, math.huge
+	for t = 1, sim.teamCount do
+		local n = sim.teamSizes[t] or 0
+		if n < bestN then
+			best, bestN = t, n
+		end
+	end
+	return best
+end
+
 -- Returns ok, reason. Safe to call for anybody: it refuses rather than throws.
 -- `lessonMode`: nil lets the profile decide the lite lesson (production), true
 -- forces it, false skips it (the /testmidjoin "vet" run).
 local function followTakeover(player: Player, friendUserId: number, lessonMode: boolean?): (boolean, string)
 	if sim == nil or sim.phase ~= "playing" then
 		return false, "the round is not running"
+	end
+	-- RANKED: nobody takes over anybody's empire. The reason is the one the
+	-- arrival handler sends back to the lobby on.
+	if RankedMatch.active() then
+		return false, "no empire is free to take"
 	end
 	if tutorialSession ~= nil then
 		return false, "not in the tutorial"
@@ -956,14 +1179,23 @@ local function followTakeover(player: Player, friendUserId: number, lessonMode: 
 	-- the free bot nearest the friend's last ground, or the biggest free bot
 	-- when there is no friend on the board at all (reviveCandidate).
 	local friendEmpire = sim:playerByUserId(friendUserId)
+	-- The friend's side; with no friend on the board, the side any other
+	-- arrival would get (arrivalTeam) rather than none at all.
 	local friendTeam = if sim.teamCount > 0 and friendEmpire ~= nil then sim.teamOf[friendEmpire.id] else nil
+	if friendTeam == nil then
+		friendTeam = arrivalTeam(player)
+	end
 	local q: any = nil
 	if friendEmpire ~= nil and friendEmpire.alive and friendEmpire.spawned and friendEmpire.tileCount > 0 then
-		q = followCandidate(friendEmpire.sumX / friendEmpire.tileCount, friendEmpire.sumY / friendEmpire.tileCount,
-			friendEmpire.tileCount * FOLLOW_MAX_RATIO, friendTeam, friendEmpire.id)
+		local fx, fy = friendEmpire.sumX / friendEmpire.tileCount, friendEmpire.sumY / friendEmpire.tileCount
+		local cap = friendEmpire.tileCount * FOLLOW_MAX_RATIO
+		-- A plain bot first; a faux one only when none is free (reviveCandidate).
+		q = followCandidate(fx, fy, cap, friendTeam, friendEmpire.id)
+			or followCandidate(fx, fy, cap, friendTeam, friendEmpire.id, true)
 	elseif friendEmpire ~= nil and type(friendEmpire.deathTile) == "number" then
-		q = followCandidate(friendEmpire.deathTile % Config.MAP_W, math.floor(friendEmpire.deathTile / Config.MAP_W),
-			math.huge, friendTeam, friendEmpire.id)
+		local fx, fy = friendEmpire.deathTile % Config.MAP_W, math.floor(friendEmpire.deathTile / Config.MAP_W)
+		q = followCandidate(fx, fy, math.huge, friendTeam, friendEmpire.id)
+			or followCandidate(fx, fy, math.huge, friendTeam, friendEmpire.id, true)
 	else
 		q = reviveCandidate()
 	end
@@ -990,6 +1222,80 @@ local function followTakeover(player: Player, friendUserId: number, lessonMode: 
 	if lessonMode ~= false then
 		task.spawn(startLiteLesson, player, q.id, lessonMode == true, if friendEmpire ~= nil then friendEmpire.id else nil)
 	end
+	return true, wasName
+end
+
+-- ============================================================ late arrival ==
+--
+-- A PLAIN LATE ARRIVAL TAKES A BOT TOO (2026-09-29). Somebody whose teleport
+-- landed after the spawn phase -- a slow phone, a console load, a flooded
+-- teleport that retried -- used to spectate the whole round: a bare SPECTATING
+-- banner, no revive (they "never held land"), ten-plus minutes of a war they
+-- could not touch. Players reported it as "I literally can't do anything".
+-- They now take command of a MID-SIZED free bot through the same hand-over a
+-- follower uses: not the leader (a late seat should not win the round for
+-- them) and not a collapsing empire either. A plain bot is preferred, a faux
+-- one only when none qualifies (reviveCandidate's rule).
+local function lateCandidate(): any
+	local plain, faux = {}, {}
+	for _, id in sim.playerOrder do
+		local q = sim.players[id]
+		if q and q.isBot and q.alive and q.spawned and q.tileCount >= REVIVE_MIN_TILES then
+			if fauxIds[id] then
+				table.insert(faux, q)
+			elseif q.userId == nil then
+				table.insert(plain, q)
+			end
+		end
+	end
+	local pool = if #plain > 0 then plain else faux
+	if #pool == 0 then
+		return nil
+	end
+	-- Ties by the LOWER id, so the pick never depends on roster order.
+	table.sort(pool, function(a, b)
+		if a.tileCount ~= b.tileCount then
+			return a.tileCount < b.tileCount
+		end
+		return a.id < b.id
+	end)
+	return pool[math.ceil(#pool / 2)]
+end
+
+-- Returns ok, reason (the nation's old name on success). Refuses rather than
+-- throws, like followTakeover.
+local function lateTakeover(player: Player): (boolean, string)
+	if sim == nil or sim.phase ~= "playing" then
+		return false, "the round is not running"
+	end
+	-- RANKED: as followTakeover -- back to the lobby, no empire handed over.
+	if RankedMatch.active() then
+		return false, "no empire is free to take"
+	end
+	if tutorialSession ~= nil then
+		return false, "not in the tutorial"
+	end
+	if sim:playerByUserId(player.UserId) ~= nil then
+		return false, "already holds an empire"
+	end
+	local q = lateCandidate()
+	if q == nil then
+		return false, "no empire is free to take"
+	end
+	local wasName = q.name
+	-- Whatever the bot had in flight comes home first, as for a follower.
+	sim:cancelAttacks(q.id)
+	adoptEmpire(player, q, arrivalTeam(player))
+	Analytics.matchStarted(player, sim.mapId, sim.modeId, false)
+	Analytics.matchSpawned(player)
+	-- `result` alone: the three remote fields are filled in key order, so a
+	-- second prop would mean something different on each result.
+	Analytics.event("late_arrival", player, 1, { result = "takeover" })
+	print(("[Conquest] %s arrived late and took command of %s (empire %d, %d tiles)"):format(
+		player.Name, wasName, q.id, q.tileCount))
+	-- The three basics for somebody who never saw the lesson; the profile
+	-- decides, exactly as for a follower.
+	task.spawn(startLiteLesson, player, q.id, false, nil)
 	return true, wasName
 end
 
@@ -1055,6 +1361,8 @@ end
 --   "fakefriend", userId            -> hands the player's own empire to a bot
 --                                      wearing userId 1, so a one-client
 --                                      session has a "friend" to follow
+--   "late", userId                  -> drops the player's empire to a bot, then
+--                                      runs a plain late arrival's takeover
 --   "state", userId                 -> which empire the player holds now
 if game:GetService("RunService"):IsStudio() then
 	local probe = Instance.new("BindableFunction")
@@ -1079,6 +1387,23 @@ if game:GetService("RunService"):IsStudio() then
 			p.tier = Config.DEFAULT_BOT_TIER
 			StateRE:FireAllClients("roster", roster())
 			return true, p.id
+		elseif op == "late" and player ~= nil then
+			-- A plain late arrival, replayed: the player's own empire becomes
+			-- an ordinary bot, they get the spectator init, and then the
+			-- takeover PlayerAdded runs for them, in that order.
+			local p = sim:playerByUserId(userId)
+			if p ~= nil then
+				sim.byUserId[userId] = nil
+				p.userId = nil
+				p.isBot = true
+				p.tier = Config.DEFAULT_BOT_TIER
+				lessons[userId] = nil
+				StateRE:FireAllClients("roster", roster())
+			end
+			sendInit(player)
+			local ok, res = lateTakeover(player)
+			local q = sim:playerByUserId(userId)
+			return ok, res, q and q.id or 0, q and q.tileCount or 0
 		elseif op == "lesson" and player ~= nil then
 			local p = sim:playerByUserId(userId)
 			return true, {
@@ -1445,12 +1770,60 @@ local BOOSTS: { [string]: (any) -> () } = {
 
 	-- THE AIRFIELD'S SKIP (2026-09-22): the rest of one rearm. See skipRearm.
 	SKIP_REARM = skipRearm,
+
+	-- THE GENERAL PACK (owner, 2026-10-02): TUTORIAL_ARMY's grant at a
+	-- million -- the men at once, past the cap -- plus a free atom bomb, the
+	-- same token TUTORIAL_NUKE banks ("sell a Nuke along with it").
+	GENERAL_PACK = function(p)
+		p.troops += Config.GENERAL_PACK_ARMY
+		p.troopOverflow = true
+		p.freeNukes = (p.freeNukes or 0) + Config.GENERAL_PACK_NUKES
+	end,
+
+	-- THE RAILGUN BUNDLE (owner, 2026-09-27): three free atom bombs, one free
+	-- defence post to place, and a railgun the SERVER places near the
+	-- homeland's centre. redeemBoost has already found that there is room
+	-- (it refuses before spending the token otherwise), so the search here
+	-- is the same search and lands. `railgunBundle` lets the buyer fire it
+	-- without the RAILGUN pass, for this round -- see the "railgun" intent.
+	RAILGUN_BUNDLE = function(p)
+		p.freeNukes = (p.freeNukes or 0) + Config.RAILGUN_BUNDLE_NUKES
+		p.freePosts = (p.freePosts or 0) + Config.RAILGUN_BUNDLE_POSTS
+		p.railgunBundle = true
+		p.freeRailguns = (p.freeRailguns or 0) + 1
+		local spot = Economy.spotNear(sim, p.id, Sim.RAILGUN, Config.RAILGUN_BUNDLE_SEARCH, Config.RAILGUN_BUNDLE_STEP)
+		local ok, landed = false, nil
+		if spot ~= nil then
+			local built, _why, at = sim:buildStructure(p.id, spot, Sim.RAILGUN)
+			ok, landed = built, at or spot
+		end
+		if not ok then
+			-- Never left lying about: a stray token would make the next
+			-- railgun this player builds by hand free.
+			p.freeRailguns = math.max(0, p.freeRailguns - 1)
+			warn(("[Conquest] Railgun Bundle: no spot for %s's railgun"):format(tostring(p.name)))
+			return
+		end
+		local plr = p.userId and Players:GetPlayerByUserId(p.userId)
+		if plr ~= nil then
+			StateRE:FireClient(plr, "built", {
+				tile = landed,
+				kind = Sim.RAILGUN,
+				gold = math.floor(p.gold),
+				cost = 0,
+			})
+		end
+	end,
 }
 
 -- Returns ok and a reason a player can read, like takeover(). The refusal
 -- order matters: everything that can turn a redeem down is checked BEFORE
 -- Data.spendBoost, so a refused redeem never costs a token.
-local function redeemBoost(player: Player, key: string): (boolean, string)
+-- `deferSave` leaves the write to the autosave (spendBoost already marks the
+-- profile dirty). The held-boost sweep passes it: a flush per token every two
+-- seconds is over the DataStore's per-key write budget and would queue ahead
+-- of the receipt flushes that are waiting to acknowledge purchases.
+local function redeemBoost(player: Player, key: string, deferSave: boolean?): (boolean, string)
 	local apply = BOOSTS[key]
 	if apply == nil then
 		return false, "not a tutorial boost"
@@ -1487,6 +1860,18 @@ local function redeemBoost(player: Player, key: string): (boolean, string)
 	if key == "TUTORIAL_FORCES" and (p.attackSpeed or 1) >= Config.TUTORIAL_ATTACK_SPEED then
 		return false, "already on"
 	end
+	-- NO ROOM FOR THE BUNDLE'S RAILGUN, NO REDEEM: the token stays banked and
+	-- the held-boost sweep asks again, so a crowded empire gets its gun the
+	-- moment there is somewhere to put it rather than losing it. Probed with
+	-- the free token in hand, exactly as the grant will build.
+	if key == "RAILGUN_BUNDLE" then
+		p.freeRailguns = (p.freeRailguns or 0) + 1
+		local spot = Economy.spotNear(sim, p.id, Sim.RAILGUN, Config.RAILGUN_BUNDLE_SEARCH, Config.RAILGUN_BUNDLE_STEP)
+		p.freeRailguns -= 1
+		if spot == nil then
+			return false, "no room for the railgun"
+		end
+	end
 	if Data.boostTokens(player, key) <= 0 then
 		return false, "none in hand"
 	end
@@ -1494,15 +1879,18 @@ local function redeemBoost(player: Player, key: string): (boolean, string)
 		return false, "none in hand"
 	end
 	apply(p)
-	task.spawn(Data.flush, player)
+	if not deferSave then
+		task.spawn(Data.flush, player)
+	end
 	print(("[Conquest] %s redeemed %s"):format(player.Name, key))
 	return true, ""
 end
 
 -- A BOOST BOUGHT DURING THE LESSON IS APPLIED THE MOMENT THE RECEIPT IS
 -- DURABLE, the same way a mid-match revive is. Bought anywhere else -- the
--- lobby, after the track ended -- the redeem says no and the token simply
--- waits on the profile for the next lesson.
+-- lobby, after the track ended, while dead -- the redeem says no, the token
+-- waits on the profile, and the held-boost sweep in serverTick spends it the
+-- next time the buyer has a live empire in a running round.
 Monetization.onGranted(function(player, entry)
 	if BOOSTS[entry.key] ~= nil and player.Parent ~= nil then
 		redeemBoost(player, entry.key)
@@ -1620,6 +2008,8 @@ local function startRound(forceMap: string?, forceMode: string?, opts: any?)
 	-- generation, the phases, the tick loop, the faux players, the wire -- is
 	-- the ordinary round this function already builds, which is the point.
 	local tutorial = (opts and opts.tutorial) == true
+	-- RANKED: humans only, two sides fixed by the lobby. nil opts clears it.
+	local rankedRound = RankedMatch.configure(opts)
 	print("[Conquest] version " .. Config.VERSION .. " -- round " .. roundId .. (tutorial and " (TUTORIAL)" or ""))
 	-- A match server is TOLD its map and mode -- the pair the card advertised
 	-- when players queued for it -- so it must not rotate. The rotation below
@@ -1684,17 +2074,24 @@ local function startRound(forceMap: string?, forceMode: string?, opts: any?)
 	moneyTracker = Money.track(sim)
 	table.clear(moneyPaid)
 	table.clear(revivedThisRound)
+	table.clear(money3x.awarded)
+	table.clear(money3x.offered)
+	table.clear(money3x.prompting)
 
 	-- Humans first so they get the low ids (and the brighter colours) -- and, in
 	-- a team mode, so the clans are placed before the bots start levelling the
 	-- sides up. Same tag, same team; see Sim.addPlayer.
 	for _, player in Players:GetPlayers() do
-		sim:addPlayer(nationNameFor(player), false, player.UserId, nil, tagFor(player))
-		-- Their pattern, if the profile is already here. When it is not -- the
-		-- ordinary case on a match server -- the `Data.onReady` hook at the
-		-- foot of this file catches it a second or two later.
-		applyPattern(player)
-		applyFlag(player)
+		-- RANKED: only the players the lobby put on a side are seated. Anyone
+		-- else is sent home by bootMatch right after this.
+		if not rankedRound or RankedMatch.tagFor(player) ~= nil then
+			sim:addPlayer(nationNameFor(player), false, player.UserId, nil, RankedMatch.tagFor(player) or tagFor(player))
+			-- Their pattern, if the profile is already here. When it is not --
+			-- the ordinary case on a match server -- the `Data.onReady` hook at
+			-- the foot of this file catches it a second or two later.
+			applyPattern(player)
+			applyFlag(player)
+		end
 	end
 
 	-- A HISTORICAL ROUND'S ROSTER IS THE SCENARIO'S. Every nation on the
@@ -1764,6 +2161,10 @@ local function startRound(forceMap: string?, forceMode: string?, opts: any?)
 	if maxEmpires then
 		botCount = math.min(botCount, math.max(0, maxEmpires - humans))
 	end
+	-- RANKED IS HUMANS ONLY (owner, 2026-10-05): no AI filler at all.
+	if rankedRound then
+		botCount = 0
+	end
 
 	-- HOW MANY OF THOSE BOTS WEAR A NAME: exactly the number of PHANTOM SEATS
 	-- the lobby card was advertising when it launched, and no more. The card
@@ -1794,12 +2195,16 @@ local function startRound(forceMap: string?, forceMode: string?, opts: any?)
 	-- phantom ceiling) does not bind it. Past the nine cleared friends the
 	-- draw hands out invented crowd identities; see Faces.
 	local mapFaux = tonumber((Maps.get(mapId :: string) :: any).FAUX)
-	-- FREE-FOR-ALL ONLY. Every faux seat lands on one side (Sim.addPlayer's
-	-- fauxTeam), so 66 of them in a private team room would be one AI side
-	-- against the humans. Public Eurasia cards are FFA-only (EurasiaMap.MODES);
+	-- FREE-FOR-ALL ONLY. Public Eurasia cards are FFA-only (EurasiaMap.MODES);
 	-- a private team room on the map gets no map faux at all.
 	if mapFaux and not tutorial and not scenario and Modes.teams(modeId) <= 0 then
 		fauxCount = math.clamp(mapFaux, 0, botCount)
+		-- FAUX_FILL (Eurasia): every bot seat wears a player's name. The draw
+		-- below hands out as many identities as the pool holds; any seat it
+		-- cannot cover stays a plain bot rather than failing the round.
+		if (Maps.get(mapId :: string) :: any).FAUX_FILL then
+			fauxCount = botCount
+		end
 	end
 	if fauxCount > 0 then
 		-- Nobody actually in the room may be impersonated: two rows wearing
@@ -1823,6 +2228,18 @@ local function startRound(forceMap: string?, forceMode: string?, opts: any?)
 			end
 		end
 	end
+
+	-- RANKED IN STUDIO: a lone tester's empty seats become AI seats on the
+	-- right sides (RankedMatch.ghosts is empty on a live server).
+	if rankedRound then
+		for i, tag in RankedMatch.ghosts() do
+			sim:addPlayer("Ghost " .. i, true, nil, FAUX_TIER, tag, true)
+		end
+	end
+
+	-- Humans together, faux seats together, sides even. Plain bots below are
+	-- neutral and never on a side, so this runs before them. See Sim.packTeams.
+	sim:packTeams()
 
 	local names = table.clone(BOT_NAMES)
 	for i = #names, 2, -1 do
@@ -1864,7 +2281,8 @@ local function startRound(forceMap: string?, forceMode: string?, opts: any?)
 			if studentPlayer then
 				-- The map goes with it: this server knows what it built,
 				-- and the per-map tutorial funnel is keyed on exactly that.
-				Analytics.tutorialStarted(studentPlayer, #Tutorial.STEPS, mapId)
+				-- Plus the win-bar bucket, exactly as the lobby dealt it.
+				Analytics.tutorialStarted(studentPlayer, #Tutorial.STEPS, Tutorial.armFor(tutorialUserId, mapId))
 			end
 		end
 	end
@@ -1922,7 +2340,14 @@ local function leaveToLobby(player: Player, bounced: boolean?)
 	end
 	leaving[player.UserId] = true
 	local options = Instance.new("TeleportOptions")
-	options:SetTeleportData({ cq = Analytics.teleportData({ player }), bounced = if bounced then true else nil })
+	-- `fromMatch`: they sat in a round, which is what the lobby's one-time
+	-- community prompt waits for (MatchmakerServer, promptCommunity). A bounced
+	-- follower never got a seat, so they do not carry it.
+	options:SetTeleportData({
+		cq = Analytics.teleportData({ player }),
+		bounced = if bounced then true else nil,
+		fromMatch = if bounced then nil else true,
+	})
 	local ok, err = pcall(function()
 		TeleportService:TeleportAsync(game.PlaceId, { player }, options)
 	end)
@@ -1965,6 +2390,15 @@ IntentRE.OnServerEvent:Connect(function(player, payload)
 		if sim and (lastHello[player.UserId] or -1e9) < hnow - 5 then
 			lastHello[player.UserId] = hnow
 			sendInit(player)
+			-- ...and, mid-war, the camera back onto their land. An init fits
+			-- the whole map, and a slow client's hello can land AFTER a
+			-- mid-round takeover (late arrival, follower) whose own "spawned"
+			-- it would otherwise undo -- leaving them zoomed out with no idea
+			-- which nation is theirs.
+			local p = sim:playerByUserId(player.UserId)
+			if sim.phase == "playing" and p ~= nil and p.spawned and p.alive and p.tileCount > 0 then
+				StateRE:FireClient(player, "spawned", { tile = empireCentre(p) })
+			end
 		end
 		return
 	end
@@ -1997,6 +2431,19 @@ IntentRE.OnServerEvent:Connect(function(player, payload)
 		end
 		lastIntent[player.UserId] = rnow
 		tryRevive(player, false)
+		return
+	end
+
+	-- 3x MONEY, the round-end button (2026-09-29). Above the empire lookup for
+	-- REVIVE's reason -- a knocked-out spectator can take the offer too -- and
+	-- on REVIVE's slower floor, since this is a purchase prompt as well.
+	if payload.t == "money3x" then
+		local mnow = os.clock()
+		if (lastIntent[player.UserId] or 0) > mnow - 1.5 then
+			return
+		end
+		lastIntent[player.UserId] = mnow
+		money3x.prompt(player)
 		return
 	end
 
@@ -2426,7 +2873,9 @@ IntentRE.OnServerEvent:Connect(function(player, payload)
 		local from = payload.from
 		-- THE PASS'S SHOT TOO, not only its building (the airstrike's rule): an
 		-- empire taken over from a bot could come with a railgun standing.
-		if not Monetization.holdsPass(player, "RAILGUN") then
+		-- ...or the Railgun Bundle's buyer this round (p.railgunBundle), whose
+		-- gun the server placed without the pass.
+		if not Monetization.holdsPass(player, "RAILGUN") and not p.railgunBundle then
 			StateRE:FireClient(player, "denied", { reason = "pass", tile = tile, kind = Sim.RAILGUN })
 			return
 		end
@@ -2446,7 +2895,7 @@ IntentRE.OnServerEvent:Connect(function(player, payload)
 		-- SKIP for the rest of the build. offerSkipRearm owns the 75% rule and
 		-- the ask clock; the pass gate is the shot's.
 		local from = payload.from
-		if Monetization.holdsPass(player, "RAILGUN") and typeof(from) == "number" and from == from
+		if (Monetization.holdsPass(player, "RAILGUN") or p.railgunBundle) and typeof(from) == "number" and from == from
 			and from >= 0 and from < Config.NUM_TILES and sim.phase == "playing" then
 			offerSkipRearm(player, p, math.floor(from), true)
 		end
@@ -2543,6 +2992,13 @@ Players.PlayerAdded:Connect(function(player)
 		return
 	end
 	local rosterMoved = reidentifyFaux(player.UserId)
+	-- THE INIT IS QUEUED FIRST. Deferred threads run in the order they were
+	-- queued, and a mid-round takeover below is deferred too: queued after
+	-- this, its fresh init and camera move land SECOND, not buried under a
+	-- spectator init. (It was queued last until 2026-09-29, which ran the
+	-- follower's takeover first and then re-sent the spectator view on top.)
+	-- Everything this handler does synchronously still happens before it.
+	task.defer(sendInit, player)
 	if sim.phase == "spawn" or sim.phase == "lobby" then
 		if not sim:playerByUserId(player.UserId) then
 			-- THE MAP'S CEILING APPLIES HERE TOO (Maps.MapData.MAX_EMPIRES).
@@ -2573,15 +3029,20 @@ Players.PlayerAdded:Connect(function(player)
 				-- A LATE ARRIVAL STILL JOINS THEIR CLAN. They came through the
 				-- same teleport their friends did, so their tag is in the batch
 				-- data exactly as it was for everyone added at round start.
-				sim:addPlayer(nationNameFor(player), false, player.UserId, nil, tagFor(player))
-				applyPattern(player)
-				rosterMoved = true
+				if RankedMatch.active() and RankedMatch.tagFor(player) == nil then
+					-- RANKED: a stranger is not seated; back to the lobby.
+					task.defer(leaveToLobby, player)
+				else
+					sim:addPlayer(nationNameFor(player), false, player.UserId, nil, RankedMatch.tagFor(player) or tagFor(player))
+					applyPattern(player)
+					rosterMoved = true
+				end
 			end
 		end
 	elseif sim.phase == "playing" then
 		-- A FOLLOWER ARRIVING MID-WAR takes command of a bot beside their
 		-- friend -- see followTakeover. Deferred behind the spectator init
-		-- below so its own fresh init lands second, not first.
+		-- above so its own fresh init lands second, not first.
 		local friendId = followedUserId(player)
 		if friendId ~= nil then
 			task.defer(function()
@@ -2599,14 +3060,33 @@ Players.PlayerAdded:Connect(function(player)
 					end
 				end
 			end)
+		elseif sim:playerByUserId(player.UserId) == nil then
+			-- ANY OTHER LATE ARRIVAL takes a bot as well -- see lateTakeover.
+			-- Same deferral, for the same reason.
+			task.defer(function()
+				if player.Parent == nil then
+					return
+				end
+				local ok, why = lateTakeover(player)
+				if ok then
+					return
+				end
+				print(("[Conquest] %s arrived late but takes no empire: %s"):format(player.Name, why))
+				if why == "no empire is free to take" then
+					-- Nothing to hand them: back to the page to queue again,
+					-- rather than a whole round of watching.
+					Analytics.event("late_arrival", player, 1, { result = "lobby" })
+					leaveToLobby(player)
+				else
+					Analytics.event("late_arrival", player, 1, { result = "spectate" })
+				end
+			end)
 		end
 	end
 	-- Names ride with the roster now, so everyone else needs the new one.
 	if rosterMoved then
 		StateRE:FireAllClients("roster", roster())
 	end
-	-- Mid-round joiners spectate until the next round.
-	task.defer(sendInit, player)
 end)
 
 -- THE NAME CAN ARRIVE AFTER THE PLAYER DOES, and usually will. A profile load
@@ -2657,6 +3137,8 @@ Players.PlayerRemoving:Connect(function(player)
 	-- `Data.install` is called at the foot of this file: connection order is
 	-- registration order.
 	settleMoney(player, true)
+	-- Leaving a live ranked round is a loss, banked before the profile goes.
+	RankedMatch.abandon(player, sim.phase, sim:playerByUserId(player.UserId) ~= nil)
 	lessons[player.UserId] = nil
 	-- LEAVING IS A DATA POINT, and it is the one that stops existing the moment
 	-- they are gone. A student who quits mid-lesson names the card that lost
@@ -2679,6 +3161,19 @@ Players.PlayerRemoving:Connect(function(player)
 		p.growthBoost = nil
 		p.goldBoost = nil
 		p.reloadMult = nil
+		-- The timed boosts were bought by the person too (Config.TIMED_BOOSTS).
+		for _, spec in Config.TIMED_BOOSTS do
+			p[spec.field] = nil
+		end
+		-- RANKED: a leaver's empire is NOT run by the AI under their name
+		-- (owner, 2026-10-05: "I dont want ai posing as real players in
+		-- ranked"). It stands idle -- Sim's bot loop skips `abandoned` -- and
+		-- says so on the map and the board.
+		if RankedMatch.active() then
+			p.abandoned = true
+			p.name = p.name .. " (LEFT)"
+			StateRE:FireAllClients("roster", roster())
+		end
 	end
 	lastIntent[player.UserId] = nil
 	lastHello[player.UserId] = nil
@@ -2713,7 +3208,7 @@ local function returnToLobby()
 	-- match half, the half that actually holds the game, as the shorter of the
 	-- two.
 	local options = Instance.new("TeleportOptions")
-	options:SetTeleportData({ cq = Analytics.teleportData(list) })
+	options:SetTeleportData({ cq = Analytics.teleportData(list), fromMatch = true })
 	local ok, err = pcall(function()
 		TeleportService:TeleportAsync(game.PlaceId, list, options)
 	end)
@@ -2789,6 +3284,11 @@ local matchIsPrivate = false
 local function publishWhere(player: Player)
 	local code = matchAccess
 	if code == nil or code == "" then
+		return
+	end
+	-- A RANKED match is never published: following a friend in would seat a
+	-- stranger in a rated game (prod review, 2026-10-05).
+	if RankedMatch.active() then
 		return
 	end
 	-- ONLY WHAT THE READER USES (2026-09-20). MatchmakerServer.followFriend
@@ -2876,6 +3376,9 @@ local function bootMatch()
 			matchAccess = if type(cfg.access) == "string" then cfg.access else nil
 			matchIsTutorial = cfg.tutorial == true
 			matchIsPrivate = cfg.private == true
+			-- Ranked is known from here on (publishWhere and the arrival wait
+			-- read it); startRound configures again from the same record.
+			RankedMatch.configure(cfg)
 			for _, player in Players:GetPlayers() do
 				publishWhere(player)
 			end
@@ -2897,7 +3400,7 @@ local function bootMatch()
 	-- Only the COUNT changes; the wait still ends when the real roster lands.
 	local phantoms = math.clamp(tonumber(cfg and cfg.phantoms) or 0, 0, FAUX_MAX)
 	-- ...and a map that states its own FAUX (Eurasia) seats that many, past
-	-- FAUX_MAX, exactly as startRound does -- or a "66 / 72" card would land
+	-- FAUX_MAX, exactly as startRound does -- or a "60 / 66" card would land
 	-- on a curtain reading "1 / 7".
 	local cfgMap = cfg and cfg.map
 	local cfgMode = cfg and cfg.mode
@@ -2909,8 +3412,13 @@ local function bootMatch()
 		phantoms = mapFaux
 	end
 	local t0 = os.clock()
-	while os.clock() - t0 < Matchmaker.BOARD_GRACE do
-		local here = #Players:GetPlayers()
+	-- A ranked record asks for a longer wait: its players come from several
+	-- lobby servers and a missing one costs somebody rating.
+	local grace = (cfg and tonumber(cfg.grace)) or Matchmaker.BOARD_GRACE
+	while os.clock() - t0 < grace do
+		-- Ranked counts only the players the lobby promised; a stranger in the
+		-- room must not start the round before the real roster lands.
+		local here = if RankedMatch.active() then RankedMatch.presentCount() else #Players:GetPlayers()
 		if here >= expected then
 			break
 		end
@@ -2925,6 +3433,21 @@ local function bootMatch()
 	-- Roblox reaps the empty server and takes this thread with it.
 	while #Players:GetPlayers() == 0 do
 		task.wait(1)
+	end
+
+	-- A RANKED MATCH WITH AN EMPTY SIDE IS NOT A MATCH: the side that came
+	-- would take the map uncontested. Nobody is rated; everyone goes back.
+	if RankedMatch.configure(cfg) and not RankedMatch.bothSidesPresent() then
+		warn("[Ranked] a side never arrived -- voiding the match")
+		RankedMatch.void()
+		StateRE:FireAllClients("ranked", { void = true })
+		LobbyRE:FireAllClients("go")
+		while #Players:GetPlayers() > 0 do
+			returnToLobby()
+			task.wait(12)
+			returning = false
+		end
+		return
 	end
 
 	-- The whole record goes in as `opts`: a public match's has none of the
@@ -2949,6 +3472,14 @@ local function bootMatch()
 				returning = false
 			end
 			return
+		end
+	end
+	-- RANKED: anyone in the room who is not on a side goes back to the lobby.
+	if RankedMatch.active() then
+		for _, player in Players:GetPlayers() do
+			if RankedMatch.tagFor(player) == nil then
+				task.spawn(leaveToLobby, player)
+			end
 		end
 	end
 	-- "go" comes AFTER the round exists, not before. `startRound` generates
@@ -2980,6 +3511,7 @@ else
 				startGold = ReplicatedStorage:GetAttribute(Matchmaker.LOCAL_GOLD_ATTR),
 				phantoms = ReplicatedStorage:GetAttribute(Matchmaker.LOCAL_PHANTOMS_ATTR),
 				tutorial = ReplicatedStorage:GetAttribute(Matchmaker.LOCAL_TUTORIAL_ATTR),
+				ranked = RankedMatch.studioConfig(),
 			}
 		)
 	end)
@@ -3094,6 +3626,40 @@ _G.ConquestEndRound = function(mode: string?): (boolean, string)
 	-- path never tells.
 	sim.phase = "ended"
 	return true, "round ended -- back to the lobby in 12s."
+end
+
+-- /win (owner, 2026-09-29: "give me a command /win, so i can test it"): the
+-- same exit as /endgame round, but with the caller named the winner, so the
+-- round's end runs as it does for a real win -- the WINS strip, the survivors'
+-- payout, and the 3x MONEY offer. `tell` is handed back what the offer came to
+-- once the end-of-round tick has made it.
+_G.ConquestWin = function(player: Player, tell: (string) -> ()): (boolean, string)
+	if sim == nil then
+		return false, "no round is running yet."
+	end
+	if sim.phase == "ended" then
+		return false, "the round has already ended."
+	end
+	local p = sim:playerByUserId(player.UserId)
+	if p == nil or (p.tileCount or 0) <= 0 then
+		return false, "you have no empire on the map -- spawn first, then /win."
+	end
+	sim.winnerId = p.id
+	sim.phase = "ended"
+	task.delay(1, function()
+		local earned = money3x.awarded[player.UserId] or 0
+		local bonus = money3x.offered[player.UserId]
+		if bonus ~= nil then
+			tell(("round paid %d Money; 3x offer is +%d. Press X3 MONEY."):format(earned, bonus))
+		elseif not Products.isLive(Products.product("MONEY3X")) then
+			tell("no 3x offer: MONEY3X has no product id.")
+		elseif earned <= 0 then
+			tell("no 3x offer: this round paid you 0 Money. Play a little longer (take land), then /win again next round.")
+		else
+			tell("no 3x offer made -- check the server output.")
+		end
+	end)
+	return true, "you win -- round ended, back to the lobby in 12s (held while the 3x prompt is open)."
 end
 
 local accumulator = 0
@@ -3213,6 +3779,61 @@ local function stepDiplomacy()
 		table.clear(allyAnswers)
 	end
 end
+
+-- HELD BOOSTS ARE SPENT WHEN THEY CAN BE (2026-09-25). `onGranted` redeems
+-- once, at the moment the receipt is durable, and redeemBoost refuses unless
+-- the buyer has a live empire in a running round. A receipt that landed a
+-- second after the round ended, in the lobby, before they picked a spawn or
+-- while they were dead banked a token that nothing ever spent -- paid for,
+-- never delivered. This sweep offers every held token again every couple of
+-- seconds of play. redeemBoost checks everything before it spends, so a
+-- refusal ("already on", dead) costs nothing and simply waits for the next.
+local BOOST_SWEEP_INTERVAL = 2
+local boostSweepTimer = 0
+
+local function sweepHeldBoosts()
+	for _, plr in Players:GetPlayers() do
+		if Data.get(plr) ~= nil then
+			for key in BOOSTS do
+				if Data.boostTokens(plr, key) > 0 then
+					redeemBoost(plr, key, true)
+				end
+			end
+		end
+	end
+end
+
+-- TIMED BOOSTS (2026-10-03). Every tick, each player's deadlines are read off
+-- the profile and turned into (a) the Sim field each boost drives on their
+-- empire, nil once it has run out, and (b) a ConquestBoost_<KEY> attribute
+-- holding the deadline, which the store card counts down from. Cheap: a table
+-- read per player per boost, and attributes only move when they change.
+local function timedBoosts()
+	local now = os.time()
+	for _, plr in Players:GetPlayers() do
+		local profile = Data.get(plr)
+		local untilT = if profile ~= nil and type(profile.boostUntil) == "table" then profile.boostUntil else nil
+		local p = if sim ~= nil then sim:playerByUserId(plr.UserId) else nil
+		for key, spec in Config.TIMED_BOOSTS do
+			local t = if untilT ~= nil then tonumber(untilT[key]) or 0 else 0
+			local on = t > now
+			local attr = Config.BOOST_ATTR .. key
+			local want = if on then t else nil
+			if plr:GetAttribute(attr) ~= want then
+				plr:SetAttribute(attr, want)
+			end
+			if p ~= nil then
+				p[spec.field] = if on then spec.mult else nil
+			end
+		end
+	end
+end
+
+Monetization.onGranted(function(player, entry)
+	if Config.TIMED_BOOSTS[entry.key] ~= nil and player.Parent ~= nil then
+		timedBoosts()
+	end
+end)
 
 local function serverTick(dt: number)
 	if not sim then
@@ -3463,6 +4084,24 @@ local function serverTick(dt: number)
 		lastVehicleCount = #vehicles
 	end
 
+	do
+		local okTimed, errTimed = pcall(timedBoosts)
+		if not okTimed then
+			warn("[Conquest] timed boosts failed: " .. tostring(errTimed))
+		end
+	end
+
+	boostSweepTimer += simDt
+	if boostSweepTimer >= BOOST_SWEEP_INTERVAL then
+		boostSweepTimer = 0
+		if sim.phase == "playing" then
+			local okSweep, errSweep = pcall(sweepHeldBoosts)
+			if not okSweep then
+				warn("[Conquest] held-boost sweep failed: " .. tostring(errSweep))
+			end
+		end
+	end
+
 	statsTimer += simDt
 	if statsTimer >= STATS_INTERVAL then
 		statsTimer = 0
@@ -3624,6 +4263,13 @@ local function serverTick(dt: number)
 			if moneyTracker ~= nil then
 				settleIds(moneyTracker:finish())
 			end
+			-- ...and, in a ranked round, everyone still here is rated.
+			RankedMatch.finish(sim)
+			-- The win was just banked on the profile, so the WINS column ticks
+			-- up on the board while everyone is still looking at it.
+			StateRE:FireAllClients("roster", roster())
+			-- ...and, with everybody paid, the offer to triple it.
+			money3x.offer()
 			-- ...and the funnel's last step, for everyone still in the room to
 			-- see it. `won` reads the TEAM when there is one: being on the
 			-- winning side is winning, whether or not the winning empire was
@@ -3646,7 +4292,10 @@ local function serverTick(dt: number)
 			end
 		end
 		endedTimer += simDt
-		if endedTimer >= 12 then
+		-- Held while a 3x MONEY prompt is open; see money3x.holding. The hold
+		-- is capped from the round's end, not per prompt, so reopening the
+		-- prompt again and again cannot keep the room (and server) alive.
+		if endedTimer >= 12 and (not money3x.holding() or endedTimer >= 12 + MONEY3X_HOLD) then
 			endedTimer = 0
 			-- A reserved server exists for ONE match. When it is over everyone
 			-- goes back to the matchmaking page and this instance shuts down;
@@ -3680,6 +4329,7 @@ end
 local TICK_FAIL_BAIL = 10
 local tickFailingSince = 0
 local tickLastWarn = 0
+local tickLastBail = 0
 RunService.Heartbeat:Connect(function(dt)
 	local ok, err = pcall(serverTick, dt)
 	if ok then
@@ -3696,9 +4346,13 @@ RunService.Heartbeat:Connect(function(dt)
 		tickLastWarn = now
 		warn("[Conquest] server tick failed: " .. tostring(err))
 	end
-	if IS_MATCH and now - tickFailingSince >= TICK_FAIL_BAIL then
-		-- Latches, and unlatches itself on a failed teleport, so calling it
-		-- every frame is one teleport attempt, not sixty.
+	if IS_MATCH and now - tickFailingSince >= TICK_FAIL_BAIL and now - tickLastBail >= 5 then
+		-- returnToLobby latches while a teleport is in flight, but it UNLATCHES
+		-- when TeleportAsync throws -- and then every failing frame would try
+		-- again, sixty teleports and sixty analytics events a second. Paced.
+		tickLastBail = now
+		-- A broken server is nobody's loss: ranked results are voided first.
+		RankedMatch.void()
 		returnToLobby()
 	end
 end)
@@ -3732,7 +4386,11 @@ Data.onReady(function(player, _profile)
 	if applyFlag(player) then
 		moved = true
 	end
-	if moved then
+	-- ...and a profile with wins on it moves the board's WINS column, which
+	-- printed a blank for this player until now. Never on a LOBBY server:
+	-- there is no round there, so no roster to send (and `roster` would index
+	-- a nil sim -- one error per returning winner, every lobby join).
+	if sim ~= nil and (moved or winsOf(player.UserId) ~= nil) then
 		StateRE:FireAllClients("roster", roster())
 	end
 end)

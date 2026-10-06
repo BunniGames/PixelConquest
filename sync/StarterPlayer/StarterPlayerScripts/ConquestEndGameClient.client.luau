@@ -43,3 +43,11 @@ if command then
 		RequestRE:FireServer(text)
 	end)
 end
+
+-- /win rides the same remote; the server tells it apart by its text.
+local winCommand = TextChatService:WaitForChild("WinCommand", 30) :: TextChatCommand?
+if winCommand then
+	winCommand.Triggered:Connect(function(_source, text)
+		RequestRE:FireServer(text)
+	end)
+end

@@ -105,6 +105,9 @@ export type Player = {
 	-- the ceiling, so an empire gets exactly one bought overflow.
 	troopOverflow: boolean?,
 	attackSpeed: number?,
+	-- Timed boosts (Config.TIMED_BOOSTS), set by ConquestServer while one runs.
+	boostAttack: number?,
+	boostGold: number?,
 	freeNukes: number?,
 	-- Free defence posts in hand -- the twin of freeNukes above, set by a
 	-- Starter Pack redeem and spent in Economy.build. Optional for the same
@@ -312,7 +315,7 @@ function Sim.new(mapId: string, seed: number, modeId: string?)
 	local mapData = Maps.get(mapId)
 	local terrain, landCount = MapGen.generate(mapId, seed)
 	local map = TileMap.new(terrain, landCount)
-	local candidates, playable = MapGen.analyze(terrain, mapData.MIN_LANDMASS or 1500)
+	local candidates, playable, landmass = MapGen.analyze(terrain, mapData.MIN_LANDMASS or 1500)
 
 	local self = setmetatable({
 		mapId = mapId,
@@ -328,6 +331,8 @@ function Sim.new(mapId: string, seed: number, modeId: string?)
 		nav = Navy.build(map, mapId),
 		transportBoats = {} :: { TransportBoat },
 		candidates = candidates,
+		-- u16 landmass id per tile (MapGen.analyze). See Sim.frontTouches.
+		landmass = landmass,
 		playableLand = math.max(playable, 1),
 		-- Tiles conquerable per tick across all attacks, scaled with this
 		-- map's size so every map fills in comparable time.
@@ -353,11 +358,14 @@ function Sim.new(mapId: string, seed: number, modeId: string?)
 		-- is the whole of "same tag, same side", and it is per-round because a
 		-- round is a new Sim.
 		teamByTag = {} :: { [string]: number },
-		-- The team the first faux seat landed on; every later faux seat joins
-		-- it. See addPlayer. nil until a faux player is added.
-		fauxTeam = nil :: number?,
+		-- Each tagged human's clan tag, for packTeams to keep a clan whole.
+		clanOf = {} :: { [number]: string },
 		teamSizes = {} :: { [number]: number },
 		teamAnchors = {} :: { [number]: number },
+		-- Faux id -> its spawn-phase schedule (see fauxSpawnPhase). Filled on
+		-- the first spawn-phase tick, so it is per-round because a round is a
+		-- new Sim.
+		fauxPlan = {} :: { [number]: { at: number, move: number? } },
 
 		-- THE OPENING (2026-09-18). Flat figures every empire is handed at
 		-- spawn (payOpening), all optional and all absent on an ordinary
@@ -684,15 +692,10 @@ function Sim.addPlayer(
 			best = self.teamByTag[tag]
 		end
 
-		-- EVERY FAUX SEAT ON ONE SIDE (owner, 2026-09-25: "ensure these ais
-		-- are always on the same team"). Works exactly like a clan tag: the
-		-- first faux seat takes the least-populated side, and every faux seat
-		-- after it is placed with it. ConquestServer adds every human before
-		-- any faux seat, so that first pick lands on the side with the fewest
-		-- people, and mid-round joiners then fill the other sides.
-		if faux == true and self.fauxTeam ~= nil then
-			best = self.fauxTeam
-		end
+		-- FAUX SEATS BALANCE LIKE PEOPLE (owner, 2026-10-03). They used to all
+		-- stick to the first faux seat's side (2026-09-25), which turned one
+		-- human + five faux seats into a 1v5. Now each takes the least-populated
+		-- side below, so that room plays 3v3.
 
 		if best == nil then
 			-- Least-populated team, ties to the lowest index. The server adds
@@ -715,13 +718,100 @@ function Sim.addPlayer(
 		self.teamSizes[team] = (self.teamSizes[team] or 0) + 1
 		if tag ~= nil and tag ~= "" then
 			self.teamByTag[tag] = team
-		end
-		if faux == true then
-			self.fauxTeam = team
+			self.clanOf[id] = tag
 		end
 	end
 
 	return p
+end
+
+-- PEOPLE ON ONE SIDE, FAUX SEATS ON THE OTHER, SIDES EVEN (owner, 2026-10-03:
+-- "3 real players on one team, and 3 ais on one team"). Run once by
+-- ConquestServer after the humans and the faux seats are added and before the
+-- spawn phase. Every seat with a team is re-placed: sides are sized
+-- ceil(seats / teams), the humans fill from team 1 forward (a clan is kept
+-- whole, so it may push its side past that size), and the faux seats fill
+-- from the LAST team backward into whatever room is left. 3 humans + 3 faux
+-- is 3v3 people against AIs; 1 human + 5 faux is still 3v3 (the human gets
+-- two faux teammates), never 1v5. Mid-round joiners still take the
+-- least-populated side in addPlayer.
+function Sim.packTeams(self: Sim)
+	local T = self.teamCount
+	if T <= 0 then
+		return
+	end
+	local groups: { { number } } = {}
+	local groupOfTag: { [string]: { number } } = {}
+	local fauxSeats: { number } = {}
+	local seats = 0
+	for _, id in self.playerOrder do
+		local p = self.players[id]
+		if p and self.teamOf[id] ~= nil then
+			seats += 1
+			if p.faux then
+				table.insert(fauxSeats, id)
+			else
+				local tag = self.clanOf[id]
+				if tag ~= nil then
+					local g = groupOfTag[tag]
+					if not g then
+						g = {}
+						groupOfTag[tag] = g
+						table.insert(groups, g)
+					end
+					table.insert(g, id)
+				else
+					table.insert(groups, { id })
+				end
+			end
+		end
+	end
+	if seats == 0 then
+		return
+	end
+	local cap = math.ceil(seats / T)
+	local sizes: { number } = {}
+	for t = 1, T do
+		sizes[t] = 0
+	end
+	local function seat(id: number, t: number)
+		self.teamOf[id] = t
+		sizes[t] += 1
+		local tag = self.clanOf[id]
+		if tag ~= nil then
+			self.teamByTag[tag] = t
+		end
+	end
+	local t = 1
+	for _, g in groups do
+		if sizes[t] > 0 and sizes[t] + #g > cap and t < T then
+			t += 1
+		end
+		for _, id in g do
+			seat(id, t)
+		end
+	end
+	for _, id in fauxSeats do
+		local pick: number? = nil
+		for u = T, 1, -1 do
+			if sizes[u] < cap then
+				pick = u
+				break
+			end
+		end
+		if pick == nil then
+			pick = 1
+			for u = 2, T do
+				if sizes[u] < sizes[pick] then
+					pick = u
+				end
+			end
+		end
+		seat(id, pick :: number)
+	end
+	for u = 1, T do
+		self.teamSizes[u] = sizes[u]
+	end
 end
 
 function Sim.playerByUserId(self: Sim, userId: number): Player?
@@ -2233,8 +2323,14 @@ function Sim.launchAttack(
 
 	-- Reinforce an existing push on the same target rather than opening a
 	-- second front that would fight for the same frontier tiles.
+	-- ...BUT OPEN LAND IS ONE "TARGET" EVERYWHERE (owner 0), so a tap on open
+	-- land across the water used to fold into the push already running at home
+	-- and the transport boat never sailed (owner, 2026-10-05). An open-land push
+	-- only takes the men when its front touches the island that was tapped.
 	for _, atk in self.attacks do
-		if atk.active and atk.attackerId == playerId and atk.targetId == targetId then
+		if atk.active and atk.attackerId == playerId and atk.targetId == targetId
+			and (targetId ~= 0 or Sim.frontTouches(self, atk, targetTile))
+		then
 			attacker.troops -= paid
 			atk.troops += committed
 			-- A NAMED STARTING POINT ALWAYS SEEDS, and pays four tiles to do
@@ -2300,9 +2396,36 @@ function Sim.launchAttack(
 		attacker.troops += committed
 		return false, "notadjacent"
 	end
+	-- The same island rule for a NEW open-land front: seedFrontier walks the
+	-- whole border, so open land at home would seed it even though the tap was
+	-- on another island. "notadjacent" is what makes the server sail instead.
+	if targetId == 0 and not Sim.frontTouches(self, atk, targetTile) then
+		attacker.troops += committed
+		return false, "notadjacent"
+	end
 
 	table.insert(self.attacks, atk)
 	return true
+end
+
+-- Does this attack's front stand on the landmass `tile` is on? Unknown answers
+-- (no landmass map, an empty border, tile id 0 / 0xFFFF) say YES, which is the
+-- behaviour from before this check existed. Runs on a tap, never per tick.
+function Sim.frontTouches(self: Sim, atk: Attack, tile: number): boolean
+	local lm = self.landmass
+	if lm == nil or atk.borderCount == 0 then
+		return true
+	end
+	local id = buffer.readu16(lm, tile * 2)
+	if id == 0 or id == 0xFFFF then
+		return true
+	end
+	for t in atk.borderSet do
+		if buffer.readu16(lm, t * 2) == id then
+			return true
+		end
+	end
+	return false
 end
 
 -- Cancel every attack this player owns, refunding the survivors.
@@ -3405,6 +3528,13 @@ local function tilesPerTick(self: Sim, atk: Attack, defender: Player?, border: n
 	-- running, which is the answer somebody who has just paid expects.
 	local attacker = self.players[atk.attackerId]
 	local speed = (attacker ~= nil and attacker.attackSpeed) or 1
+	-- THE SPECIAL FORCES BOOST NEVER SPEEDS A FIGHT WITH A PERSON (owner,
+	-- 2026-10-04). It applies on open land and against AI empires -- isBot,
+	-- which includes the faux "players" and anyone who has left -- so no real
+	-- player ever loses ground faster because someone else paid.
+	if attacker ~= nil and attacker.boostAttack ~= nil and (defender == nil or defender.isBot) then
+		speed *= attacker.boostAttack
+	end
 	if defender then
 		return math.clamp(
 			(Config.SPEED_RATIO_DIV * atk.troops / math.max(defender.troops, 1)) * 2,
@@ -3930,6 +4060,21 @@ end
 local sortieScratch: { any } = {}
 local sortieD2: { number } = {}
 
+-- THE HUNTER ARSENAL'S ONE RULE (Config.BOT_HUNTER_ARSENAL): true when
+-- `shooterId` is a hunter AI and `victimId` is a person, i.e. when the shot
+-- must leave that empire alone. Aimpoints ask it here, and the impacts in
+-- Artillery, Airstrikes, Railgun and Nukes' scattershot ask the same thing
+-- inline (they cannot require Sim). A person who LEFT is isBot and fair game,
+-- the nuke rule's line.
+function Sim.hunterSpares(self: Sim, shooterId: number, victimId: number): boolean
+	local s = self.players[shooterId]
+	if s == nil or not s.aiHunter or not Config.BOT_HUNTER_ARSENAL then
+		return false
+	end
+	local v = self.players[victimId]
+	return v ~= nil and not v.isBot
+end
+
 -- The tile at (fx, fy) if it is hostile to `p` and inside `range` of the
 -- field at `u`, else nil.
 local function hostileTileFor(self: Sim, p: Player, u: any, fx: number?, fy: number?, range: number): number?
@@ -3943,6 +4088,10 @@ local function hostileTileFor(self: Sim, p: Player, u: any, fx: number?, fy: num
 	local t = y * W + x
 	local o = buffer.readu8(self.map.owner, t)
 	if o == 0 or o == p.id or self.players[o] == nil or Sim.friendly(self, p.id, o) then
+		return nil
+	end
+	-- A hunter's arsenal is for AI ground only (Sim.hunterSpares).
+	if Sim.hunterSpares(self, p.id, o) then
 		return nil
 	end
 	local ux = u.tile % W
@@ -3972,6 +4121,9 @@ local function botAirstrike(self: Sim, p: Player)
 		return
 	end
 	local chance = Config.BOT_AIRSTRIKE_CHANCE or 0.1
+	if p.aiHunter and Config.BOT_HUNTER_ARSENAL then
+		chance = Config.BOT_HUNTER_AIRSTRIKE_CHANCE or chance
+	end
 	local range = Config.AIRFIELD_RANGE or 120
 	for _, u in fields do
 		if u.active and u.ownerId == p.id and not u.underConstruction and not Units.inCooldown(u) then
@@ -3991,6 +4143,7 @@ local function botAirstrike(self: Sim, p: Player)
 					and s.ownerId ~= p.id
 					and self.players[s.ownerId] ~= nil
 					and not Sim.friendly(self, p.id, s.ownerId)
+					and not Sim.hunterSpares(self, p.id, s.ownerId)
 					and sortieD2[i] < bestD
 				then
 					bestD = sortieD2[i]
@@ -4019,6 +4172,84 @@ local function botAirstrike(self: Sim, p: Player)
 			end
 			if dst ~= nil then
 				Airstrikes.order(self, p.id, u.tile, dst)
+			end
+		end
+	end
+end
+
+-- A HUNTER'S RAILGUN (Config.BOT_HUNTER_ARSENAL, 2026-09-29). Nothing else
+-- owns an AI railgun. The slug has no range, so the aimpoint is picked across
+-- the whole map: the AI empire pressing this hunter hardest, else the one it
+-- is pressing hardest, else the biggest AI on the map -- and on that empire,
+-- its highest-level city or port, else the middle of its ground. The order
+-- goes through Railgun.order, the person's route.
+local function railVictim(self: Sim, p: Player): Player?
+	local best: Player? = nil
+	local bestTroops = 0
+	for _, atk in self.attacks do
+		if atk.active and atk.troops > bestTroops then
+			local other = if atk.targetId == p.id then atk.attackerId
+				elseif atk.attackerId == p.id then atk.targetId
+				else nil
+			local o = other and self.players[other]
+			if o and o.alive and o.isBot and not Sim.friendly(self, p.id, o.id) then
+				bestTroops = atk.troops
+				best = o
+			end
+		end
+	end
+	if best ~= nil then
+		return best
+	end
+	local bestTiles = 0
+	for _, id in self.playerOrder do
+		local o = self.players[id]
+		if o and o.alive and o.isBot and o.id ~= p.id and o.tileCount > bestTiles
+			and not Sim.friendly(self, p.id, o.id)
+		then
+			bestTiles = o.tileCount
+			best = o
+		end
+	end
+	return best
+end
+
+local function botRailgun(self: Sim, p: Player)
+	if not (p.aiHunter and Config.BOT_HUNTER_ARSENAL) then
+		return
+	end
+	if Units.count(self, p.id, Units.RAILGUN) <= 0 then
+		return
+	end
+	local guns = Units.ofType(self, Units.RAILGUN)
+	if guns == nil then
+		return
+	end
+	for _, u in guns do
+		if u.active and u.ownerId == p.id and not u.underConstruction and not Units.inCooldown(u)
+			and self.rng:NextNumber() < (Config.BOT_HUNTER_RAILGUN_CHANCE or 0.5)
+		then
+			local v = railVictim(self, p)
+			if v == nil then
+				return
+			end
+			local dst: number? = nil
+			local bestLevel = 0
+			for _, s in self.structList do
+				if s.ownerId == v.id and s.unit ~= nil and s.unit.level > bestLevel then
+					bestLevel = s.unit.level
+					dst = s.tile
+				end
+			end
+			if dst == nil and v.tileCount > 0 then
+				local x = math.floor(v.sumX / v.tileCount + 0.5)
+				local y = math.floor(v.sumY / v.tileCount + 0.5)
+				if TileMap.inBounds(x, y) and buffer.readu8(self.map.owner, y * W + x) == v.id then
+					dst = y * W + x
+				end
+			end
+			if dst ~= nil then
+				Railgun.order(self, p.id, u.tile, dst)
 			end
 		end
 	end
@@ -4110,6 +4341,16 @@ local FIRST_MISSILE_SILO_RATIO = 0.4
 -- Config.TRAIN_GOLD_SELF if that is what wants cutting.
 local FIRST_FACTORY_RATIO = 0.5
 local BUILD_ORDER = { Economy.PORT, Economy.FACTORY, Units.SAM_LAUNCHER, Units.MISSILE_SILO, Units.ARTILLERY, Units.AIRFIELD }
+-- A HUNTER BUYS ITS ARSENAL FIRST (Config.BOT_HUNTER_ARSENAL), then the
+-- economy. Each kind stops being wanted at its ceiling here, so the ladder
+-- falls through to ports and cities once the arsenal is up.
+local HUNTER_BUILD_ORDER = { Units.ARTILLERY, Units.MISSILE_SILO, Units.AIRFIELD, Units.RAILGUN, Economy.PORT, Economy.FACTORY }
+local HUNTER_ARSENAL_CAP: { [number]: number } = {
+	[Units.ARTILLERY] = Config.BOT_HUNTER_MAX_ARTILLERY or 2,
+	[Units.AIRFIELD] = Config.BOT_HUNTER_MAX_AIRFIELD or 1,
+	[Units.RAILGUN] = Config.BOT_HUNTER_MAX_RAILGUN or 1,
+	[Units.MISSILE_SILO] = Config.BOT_HUNTER_MAX_SILO or 1,
+}
 
 -- upstream `unitsOwned` is the SUM OF LEVELS, which is what Units.count
 -- returns -- a level-3 city counts as three.
@@ -4124,6 +4365,22 @@ local function shouldBuildStructure(self: Sim, p: Player, utype: number, cityCou
 	-- spend its build pass failing to raise one.
 	if utype == Economy.FACTORY and not Config.FACTORIES_ENABLED then
 		return false
+	end
+	-- ONLY AN AI POSING AS A PERSON RAISES A GUN OR A FIELD (owner, 2026-09-29:
+	-- "make it so that only AIs posing as real players can spawn them"). Ahead
+	-- of the hunter arsenal, so a hunter is refused both as well.
+	if (utype == Units.ARTILLERY or utype == Units.AIRFIELD) and not p.faux then
+		return false
+	end
+	-- THE HUNTER ARSENAL (Config.BOT_HUNTER_ARSENAL): a hunter always fields
+	-- the guns, the field, the railgun and a silo, off its own small ceilings
+	-- and from its first city, instead of the rare per-empire rolls below.
+	if p.aiHunter and Config.BOT_HUNTER_ARSENAL then
+		local cap = HUNTER_ARSENAL_CAP[utype]
+		if cap ~= nil then
+			local need = if utype == Units.RAILGUN then (Config.BOT_HUNTER_RAILGUN_CITIES or 1) else 1
+			return cityCount >= need and Units.count(self, p.id, utype) < cap
+		end
 	end
 	local ratio = STRUCTURE_RATIO_PER_CITY[utype]
 	if ratio == nil then
@@ -4200,6 +4457,7 @@ local function structureGold(self: Sim, p: Player, utype: number): number
 		or utype == Economy.DEFENSE_POST
 		or utype == Economy.ARTILLERY
 		or utype == Economy.AIRFIELD
+		or utype == Economy.RAILGUN
 	then
 		return Economy.cost(p, utype)
 	end
@@ -4253,6 +4511,8 @@ local function tryPlace(
 		or utype == Units.ARTILLERY
 		-- ...AND THE AIRFIELD, priced on Economy's ladder like the battery.
 		or utype == Units.AIRFIELD
+		-- ...AND A HUNTER'S RAILGUN (2026-09-29), the same ladder a person's is.
+		or utype == Units.RAILGUN
 	-- UP BEFORE OUT (Config.BOT_UPGRADE_BIAS). Only for the centroid placer:
 	-- a post or a battery aimed at a front is a new building by nature. Aiming
 	-- Economy.build at one of our own stations' tiles IS the upgrade path --
@@ -4514,8 +4774,9 @@ local function botBuild(self: Sim, p: Player)
 	-- water components the empire touches; this is the same answer for the one
 	-- decision that reads it (how badly a factory is wanted) and costs nothing.
 	local coastal = p.portCount > 0
-	for _, utype in BUILD_ORDER do
-		local isDefence = utype == Units.SAM_LAUNCHER or utype == Units.MISSILE_SILO or utype == Units.ARTILLERY or utype == Units.AIRFIELD
+	local order = if p.aiHunter and Config.BOT_HUNTER_ARSENAL then HUNTER_BUILD_ORDER else BUILD_ORDER
+	for _, utype in order do
+		local isDefence = utype == Units.SAM_LAUNCHER or utype == Units.MISSILE_SILO or utype == Units.ARTILLERY or utype == Units.AIRFIELD or utype == Units.RAILGUN
 		if (defences or not isDefence)
 			and shouldBuildStructure(self, p, utype, cityCount, coastal)
 			and p.gold >= structureGold(self, p, utype)
@@ -4763,6 +5024,8 @@ function Sim.botThink(self: Sim, p: Player)
 	botBuild(self, p)
 	-- A rearmed AI airfield rolls for a sortie on the same beat (2026-09-21).
 	botAirstrike(self, p)
+	-- ...and a hunter's railgun (Config.BOT_HUNTER_ARSENAL).
+	botRailgun(self, p)
 
 	-- CONQUEST-ONLY decorrelation. Upstream gives each AI its own PseudoRandom
 	-- seeded from its id hash (TribeExecution.ts:22) and a distinct attackRate,
@@ -5472,7 +5735,10 @@ function Sim.winThreshold(self: Sim): number
 	-- ZERO. There is no per-mode floor upstream, and that is precisely why a
 	-- stalled game is guaranteed to end -- a floor above an even split is the
 	-- one thing that can make a round unwinnable.
-	local base = if self.teamCount > 0 then Config.WIN_PERCENT_TEAM else Config.WIN_PERCENT_FFA
+	-- `winBase` is a per-round override, set only by a full tutorial (the
+	-- win-bar experiment, Tutorial.winFor). Nil everywhere else.
+	local base = self.winBase
+		or (if self.teamCount > 0 then Config.WIN_PERCENT_TEAM else Config.WIN_PERCENT_FFA)
 	if not Config.OVERTIME_ENABLED then
 		return base
 	end
@@ -5530,6 +5796,116 @@ local function checkElimination(self: Sim)
 	end
 end
 
+-- ================================================ faux players pick too ==
+-- A FAUX PLAYER PUTS ITS DOT DOWN LIKE A PERSON (owner, 2026-10-04: "for npcs
+-- posing as players. in the map location spawning phase, all players should
+-- see where they are choosing as well. make it more variable in the timing
+-- they choose their starting spot"). Before this every faux seat was dropped
+-- by autoSpawn on the tick the phase ended, in the same instant as the plain
+-- AI roster -- so the "players" were the only people in the lobby who never
+-- chose anywhere, which is the tell.
+--
+-- It goes through previewSpawn, the exact path a click takes: the dot is real
+-- territory, so every client already sees it in that empire's colour, the
+-- spacing rule already keeps a person off it (and it off a person), and
+-- commitSpawn turns it into an empire with everybody else's. No second spawn
+-- path.
+--
+-- THE TIMING IS THE DISGUISE. A crowd decides at different speeds: a few tap
+-- the moment the map appears, most look around first, a few leave it to the
+-- last seconds -- and about a third change their mind and move the dot once.
+-- Drawn per faux from its own Random (seed + id), so the plan does not shift
+-- the sim's rng sequence and two faux never move in lockstep.
+--
+-- NOT ON A PREDRAWN MAP: there a pick claims a whole country, and a faux
+-- grabbing one would take it away from the people the mode is for.
+local FAUX_PICK_EARLY = 0.25 -- share who tap almost at once (1-3 s)
+local FAUX_PICK_LATE = 0.2 -- share who leave it to the end (9-13 s)
+local FAUX_MOVE_CHANCE = 0.35 -- share who move their dot once
+
+local function fauxTile(self: Sim, p: Player, rng: Random): number?
+	local candidates = self.candidates
+	if #candidates == 0 then
+		return nil
+	end
+	-- A team faux stands near its side, as autoSpawn would have put it.
+	local myTeam = self.teamOf[p.id]
+	local anchor = myTeam ~= nil and self.teamAnchors[myTeam] or nil
+	if anchor then
+		local ax, ay = anchor % W, (anchor - anchor % W) / W
+		local best, bestScore = nil, math.huge
+		for _ = 1, 300 do
+			local tile = candidates[rng:NextInteger(1, #candidates)]
+			local tx, ty = tile % W, (tile - tile % W) / W
+			local dx, dy = tx - ax, ty - ay
+			local score = (dx * dx + dy * dy) * (0.7 + rng:NextNumber() * 0.6)
+			if score < bestScore and Sim.isValidSpawn(self, tile, p.id) then
+				bestScore = score
+				best = tile
+			end
+		end
+		return best
+	end
+	for _ = 1, 200 do
+		local tile = candidates[rng:NextInteger(1, #candidates)]
+		if TileMap.isPassable(self.map, tile) and Sim.isValidSpawn(self, tile, p.id) then
+			return tile
+		end
+	end
+	return nil
+end
+
+local function fauxSpawnPhase(self: Sim)
+	if self.historical then
+		return
+	end
+	local rate = Config.TICK_RATE
+	local last = Config.SPAWN_PHASE_SECONDS * rate
+	for _, id in self.playerOrder do
+		local p = self.players[id]
+		if p and p.faux and not p.spawned then
+			local plan = self.fauxPlan[id]
+			local rng = Random.new(((self.seed or 1) * 7919 + id * 104729) % 2147483647)
+			if plan == nil then
+				local r = rng:NextNumber()
+				local secs = if r < FAUX_PICK_EARLY
+					then rng:NextNumber(1, 3)
+					elseif r > 1 - FAUX_PICK_LATE then rng:NextNumber(9, 13)
+					else rng:NextNumber(3, 9)
+				local at = math.floor(secs * rate)
+				local move = nil
+				-- Only someone who picked with time to spare reconsiders.
+				if rng:NextNumber() < FAUX_MOVE_CHANCE and secs < 10 then
+					move = math.floor(rng:NextNumber(secs + 2, 13.5) * rate)
+				end
+				plan = { at = math.min(at, last - 5), move = move }
+				self.fauxPlan[id] = plan
+			end
+			-- `>=`, not `==`: the tutorial jumps the clock forward when the
+			-- student picks, and a faux due inside the skipped stretch still
+			-- has to put its dot down.
+			if p.spawnPreview == nil and self.phaseTick >= plan.at then
+				-- A distinct draw from the plan's own, keyed on the tick.
+				local pick = Random.new(((self.seed or 1) * 31 + id * 7 + self.phaseTick) % 2147483647)
+				local tile = fauxTile(self, p, pick)
+				if tile then
+					Sim.previewSpawn(self, p, tile)
+				else
+					-- Nowhere legal right now; try again in a second.
+					plan.at = self.phaseTick + rate
+				end
+			elseif plan.move and p.spawnPreview ~= nil and self.phaseTick >= plan.move then
+				plan.move = nil
+				local pick = Random.new(((self.seed or 1) * 131 + id * 17 + self.phaseTick) % 2147483647)
+				local tile = fauxTile(self, p, pick)
+				if tile then
+					Sim.previewSpawn(self, p, tile)
+				end
+			end
+		end
+	end
+end
+
 function Sim.step(self: Sim)
 	self.tick += 1
 	self.phaseTick += 1
@@ -5541,6 +5917,7 @@ function Sim.step(self: Sim)
 	-- (see Sim.drainChanges).
 
 	if self.phase == "spawn" then
+		fauxSpawnPhase(self)
 		if self.phaseTick >= Config.SPAWN_PHASE_SECONDS * Config.TICK_RATE then
 			-- THE DOTS BECOME EMPIRES FIRST. Everybody who chose a spot gets
 			-- the spot they chose; only then are the unplaced -- people who
@@ -5600,7 +5977,7 @@ function Sim.step(self: Sim)
 				or 1
 			local tier = Config.TIER[p.tier]
 			p.gold += tier.GOLD_PER_TICK * (Config.GOLD_MULTIPLIER or 1) * buff
-				* (1 + (p.goldBoost or 0))
+				* (1 + (p.goldBoost or 0)) * (p.boostGold or 1)
 			local max = maxTroops(p)
 			-- An army ABOVE its ceiling snaps back to it. Upstream gets this
 			-- for free: troopIncreaseRate returns `min(troops + toAdd, max) -
@@ -5729,7 +6106,9 @@ function Sim.step(self: Sim)
 	-- Bots.
 	for _, id in self.playerOrder do
 		local p = self.players[id]
-		if p and p.isBot and p.alive then
+		-- `abandoned` is a ranked leaver's empire: nobody plays it, not even
+		-- the AI (ConquestServer's PlayerRemoving sets it).
+		if p and p.isBot and p.alive and not p.abandoned then
 			local rate = p.aiThink or Config.BOT_THINK_TICKS
 			local offset = (self.tick + p.thinkOffset) % rate
 			if offset == 0 then

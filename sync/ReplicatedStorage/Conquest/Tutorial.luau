@@ -237,6 +237,50 @@ function Tutorial.mapFor(userId: number): string
 	return Tutorial.MAPS[(id % n) + 1]
 end
 
+-- ================================================== the win-bar experiment ==
+-- (owner, 2026-10-02: "lower down the win requirement from 90 to 80 for 10% of
+-- the players ... see how long the player ends up playing for after the
+-- tutorial"). WIN_TEST_SHARE of accounts finish the lesson at WIN_TEST of the
+-- map instead of Config.WIN_PERCENT_FFA -- the "conquer" card, its title, the
+-- win bar and the sim's own win check all move together (session.winShare,
+-- sim.winBase).
+--
+-- DEALT BY USER ID, like the map and for the same reason: a /tutorial retry
+-- must land in the same arm. HASHED rather than `id % 10`, so the bucket is
+-- not lined up with the map deal's `id % #MAPS` if that experiment resumes.
+--
+-- BOTH ARMS GET FRESH FUNNELS. `armFor` is the label ConquestAnalytics files
+-- the lesson under -- `us_w90` / `us_w80` -- so `tutorial_us_w80` and
+-- `playtime_us_w80` sit beside their `_w90` control and both start counting on
+-- the same day. The old `tutorial_us` rows stay readable as history.
+--
+-- To end it: set WIN_TEST_SHARE = 0 (everyone gets `_w90`), or set
+-- Config.WIN_PERCENT_FFA to the winner and WIN_TEST_SHARE = 0.
+Tutorial.WIN_TEST = 0.80
+Tutorial.WIN_TEST_SHARE = 0.10
+
+function Tutorial.winFor(userId: number?): number
+	local id = math.floor(math.abs(tonumber(userId) or 0))
+	-- No account (the headless harness, a Studio bot): always the control.
+	if id == 0 or Tutorial.WIN_TEST_SHARE <= 0 then
+		return Config.WIN_PERCENT_FFA
+	end
+	local h = 0
+	for i = 1, #tostring(id) do
+		h = (h * 31 + string.byte(tostring(id), i)) % 1000003
+	end
+	h = (h * 31 + 87) % 1000003
+	if h % 100 < Tutorial.WIN_TEST_SHARE * 100 then
+		return Tutorial.WIN_TEST
+	end
+	return Config.WIN_PERCENT_FFA
+end
+
+-- The analytics arm: the map, then the win bar in whole percent.
+function Tutorial.armFor(userId: number?, mapId: string): string
+	return ("%s_w%d"):format(mapId, math.floor(Tutorial.winFor(userId) * 100 + 0.5))
+end
+
 Tutorial.FAUX_COUNT = 3
 -- Enough NPCs that the land grab converges in a few minutes instead of the
 -- fifteen a full-size round takes: the pressure a tutorial needs is a
@@ -426,6 +470,9 @@ export type Session = {
 	launched: boolean,
 	finished: boolean,
 	failed: boolean,
+	-- THE SHARE OF THE MAP THE "conquer" CARD ASKS FOR. Tutorial.winFor of the
+	-- student's account -- see the win-bar experiment.
+	winShare: number,
 }
 
 local function shuffled<T>(list: { T }, rng: Random): { T }
@@ -565,7 +612,16 @@ function Tutorial.attach(sim: any, studentId: number, identityOf: { [number]: Id
 		launched = false,
 		finished = false,
 		failed = false,
+		winShare = Config.WIN_PERCENT_FFA,
 	}
+	-- THE WIN-BAR EXPERIMENT. A full lesson owns its round, so the sim's own
+	-- win check (and the bar the client draws off it) moves with the card. A
+	-- lite track rides a REAL match and must never touch its finish line.
+	if not lite then
+		local student = sim.players[studentId]
+		session.winShare = Tutorial.winFor(student and student.userId or 0)
+		sim.winBase = session.winShare
+	end
 	-- THE STUDENT'S TILT, ARMED HERE RATHER THAN BESIDE `protect`. The grace
 	-- is a window ConquestServer chooses to open and could reasonably choose
 	-- not to; the buff is a property of a sim HAVING a student in it at all.
@@ -2132,6 +2188,8 @@ end
 export type Step = {
 	id: string,
 	title: string,
+	-- Optional per-session title; outranks `title` in Tutorial.state.
+	titleFor: ((Session) -> string)?,
 	-- ONE SHORT LINE. The ring says where and the armed button says which
 	-- control; all the body has to add is what the tap means. Long copy here is
 	-- the failure this track was rewritten to fix.
@@ -2350,11 +2408,17 @@ Tutorial.STEPS = {
 	-- denominator used here (Nukes.contestableLand: land that has not been
 	-- glassed). KEEP THE 90 IN THE TITLE IN STEP WITH THAT CONSTANT.
 	--
+	-- `titleFor` OUTRANKS `title` (Tutorial.state): the win-bar experiment
+	-- deals some students 80%, and the card has to say the number they got.
+	--
 	-- NO RING AND NO ARMED BUTTON. There is no one tile to point at: the
 	-- answer is the map, and every control it takes has already been taught.
 	{
 		id = "conquer",
 		title = "TAKE 90% OF THE MAP",
+		titleFor = function(s: Session): string
+			return ("TAKE %d%% OF THE MAP"):format(math.floor((s.winShare or Config.WIN_PERCENT_FFA) * 100 + 0.5))
+		end,
 		body = "",
 		hint = "",
 		done = function(s: Session): boolean
@@ -2372,7 +2436,7 @@ Tutorial.STEPS = {
 				return false
 			end
 			local total = nukes().contestableLand(sim)
-			return total > 0 and p.tileCount / total >= Config.WIN_PERCENT_FFA
+			return total > 0 and p.tileCount / total >= (s.winShare or Config.WIN_PERCENT_FFA)
 		end,
 	},
 } :: { Step }
@@ -2635,7 +2699,7 @@ function Tutorial.state(session: Session): any
 		-- is a card and nothing more -- not a lesson round.
 		lite = session.lite == true,
 		id = step and step.id or "done",
-		title = step and step.title or "",
+		title = step and (step.titleFor and step.titleFor(session) or step.title) or "",
 		body = step and step.body or "",
 		hint = step and step.hint or "",
 		-- NOTHING TRUE LEFT TO SAY, SO SAY NOTHING (owner, 2026-09-03: "tap to

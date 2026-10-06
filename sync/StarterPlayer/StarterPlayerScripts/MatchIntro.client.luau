@@ -38,6 +38,11 @@ local playerGui = player:WaitForChild("PlayerGui")
 local screen = Instance.new("ScreenGui")
 screen.Name = "ConquestMatchIntro"
 screen.IgnoreGuiInset = true
+-- The WHOLE glass, notch and rounded corners too: IgnoreGuiInset alone means
+-- DeviceSafeInsets, which left a bare band round the curtain on a phone. The
+-- words are centred, so nothing here can land under a cutout.
+screen.ScreenInsets = Enum.ScreenInsets.None
+screen.ClipToDeviceSafeArea = false
 screen.ResetOnSpawn = false
 screen.DisplayOrder = 20
 screen.Parent = playerGui

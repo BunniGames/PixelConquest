@@ -58,6 +58,9 @@ local AfricaMap = require(script.Parent.AfricaMap)
 local PhilippinesMap = require(script.Parent.PhilippinesMap)
 local EurasiaMap = require(script.Parent.EurasiaMap)
 local MarsMap = require(script.Parent.MarsMap)
+local UkMap = require(script.Parent.UkMap)
+local IndiaMap = require(script.Parent.IndiaMap)
+local NorthAmericaMap = require(script.Parent.NorthAmericaMap)
 
 export type MapData = {
 	NAME: string,
@@ -138,7 +141,15 @@ local Maps = {}
 -- record: Maps.next and Modes.next stepping together) now pairs each map
 -- with one fixed mode. The public board draws from Matchmaker.allPairs, every
 -- map in every mode, and is unaffected.
-Maps.ORDER = { "us", "istanbul", "europe", "tokyo", "china", "venice", "medit", "nyc", "japan", "korea", "africa", "philippines", "pacific", "world", "eurasia", "mars" }
+--
+-- UNITED KINGDOM and the INDIAN SUBCONTINENT (2026-10-02). The UK is an
+-- island map at 2.0 km/px, the scale class of Japan and Korea, so it follows
+-- Korea. India is a continent at 6.7 km/px with the Himalaya as its northern
+-- wall, so it follows Africa, the other continent framed by height.
+--
+-- NORTH AMERICA (2026-10-05) is Alaska to Costa Rica at 13.3 km/px, a coarse
+-- continent like Africa, so it sits beside it.
+Maps.ORDER = { "us", "istanbul", "europe", "tokyo", "china", "venice", "medit", "nyc", "japan", "korea", "uk", "africa", "namerica", "india", "philippines", "pacific", "world", "eurasia", "mars" }
 
 Maps.BY_ID = {
 	us = UsMap,
@@ -157,6 +168,9 @@ Maps.BY_ID = {
 	philippines = PhilippinesMap,
 	eurasia = EurasiaMap,
 	mars = MarsMap,
+	uk = UkMap,
+	india = IndiaMap,
+	namerica = NorthAmericaMap,
 } :: { [string]: MapData }
 
 function Maps.get(id: string): MapData

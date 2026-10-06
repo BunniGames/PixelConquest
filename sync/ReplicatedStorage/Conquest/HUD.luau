@@ -38,6 +38,7 @@ local Icons = require(script.Parent.Icons)
 local Sfx = require(script.Parent.Sfx)
 -- For the REVIVE button's price and whether it is on sale at all.
 local Products = require(script.Parent.Products)
+local MoneyNote = require(script.Parent.MoneyNote)
 -- For the lesson card's pop, and nothing else here: everything that moves
 -- every frame (the armed rail's breathing, the ping) rides the HUD's own
 -- clock -- see the notes beside them. A one-shot on a card that changes a
@@ -399,6 +400,15 @@ local ALERT_X = (REF_W - ALERT_W) / 2
 -- inside -- authored in Scale against the strip -- comes out at twice the
 -- size; wider so a sixteen-letter name and WINS still sit in one line at it.
 local WIN_W, WIN_H = 640, 64
+-- ...and the row of winners' faces directly under it (owner, 2026-10-02: "for
+-- the winning text, display Name Wins or X Team Wins, along with their pfps").
+-- One table rather than four locals: this module is near Luau's local limit.
+local WIN_FACE = {
+	D = 52, -- disc diameter, reference px
+	CAP = 14, -- name caption under each disc, team rounds only
+	GAP = 10,
+	MAX = 8, -- discs before the rest collapse into one "+N"
+}
 
 -- WHAT THIS HUD COVERS OF THE MAP, in reference px: the band across the top
 -- (Roblox's own topbar, then the alert line and the team strip under it) and
@@ -432,7 +442,9 @@ local PAY_Y = 120
 local PAY_HOLD = 9
 local PAY_FADE = 1.2
 
-local BAR_W, BAR_H = 560, 124
+-- 102, not 124 (2026-09-27): the attack-size button row is gone (one fixed
+-- size, Config.ATTACK_PRESETS), so the bar ends under the caption row.
+local BAR_W, BAR_H = 560, 102
 local BAR_X = (REF_W - BAR_W) / 2
 local BAR_Y = REF_H - 14 - BAR_H
 
@@ -589,8 +601,12 @@ local DEFEAT_TITLE_PX, DEFEAT_HINT_PX = 19, 12
 local ROW_INSET = 6
 local COLS = {
 	{ "Rank", 10, 30, false },
-	{ "Name", 76, 128, false },
-	{ "Land", 208, 72, true },
+	{ "Name", 76, 92, false },
+	-- CAREER WINS (2026-10-02). Blank for every AI and for anyone who has not
+	-- won yet -- so a faux player and a real newcomer read the same -- and in
+	-- gold when there is a number to print. Name and Land gave up the room.
+	{ "Wins", 170, 42, true },
+	{ "Land", 216, 64, true },
 }
 local AVATAR_X, AVATAR_D = 42, 26
 
@@ -896,6 +912,45 @@ local TUT_STROKE_T = 0.1
 
 function HUD.new(screen: ScreenGui): HUD
 	local self = setmetatable({ screen = screen }, HUD)
+
+	-- THE HUD STAYS OUT OF THE NOTCH (owner, 2026-09-29: "on mobile, the edges
+	-- are always buggy/clipped" -- the fourth report). This gui ignored every
+	-- inset, so on a phone held sideways the standings, the rail and the leave
+	-- button were laid out under the camera cutout and past the rounded
+	-- corners. DeviceSafeInsets keeps it to the glass that is really there; the
+	-- Roblox topbar is still ignored exactly as before, and on a desktop or a
+	-- console the two rects are identical, so nothing there moves. Every panel
+	-- keeps its name and parent (PlusTab, TutorialDeal and Money3x find them by
+	-- path). The MAP still has to reach every edge, so ConquestClient stretches
+	-- the viewport back out by `safeInsets`, measured against `window` -- an
+	-- empty full-window gui -- rather than assumed.
+	screen.ScreenInsets = Enum.ScreenInsets.DeviceSafeInsets
+	-- AND NOTHING IN IT IS CLIPPED TO THAT RECT (owner, 2026-09-29, screenshot:
+	-- the map stopped dead at the safe area with a bare band round it).
+	-- ClipToDeviceSafeArea defaults to TRUE, which cut the viewport off at the
+	-- safe edge however far out ConquestClient pushed it. The panels are laid
+	-- out inside the rect by ScreenInsets anyway; only the map reaches past it.
+	screen.ClipToDeviceSafeArea = false
+	-- AND THE ENGINE MAY NOT STRETCH ANYTHING IN IT (owner, 2026-09-29: "when i
+	-- move around, the things on maps like trains, buildings seem to move off
+	-- place all synchronously" -- a bug reported again and again on mobile).
+	-- SafeAreaCompatibility defaults to FullscreenExtension, which grows every
+	-- frame sized (1, 1) out into the notch and home-bar strips. Inside the map
+	-- that is exactly the layers the markers live in -- Structures' root and
+	-- its Rails / Marks / Vehicles, NationLabels', Missiles' -- while the
+	-- terrain tiles, at 1/COLS, are left alone. So every chip, train, boat and
+	-- name was placed in Scale against a rect a few dozen px bigger than the
+	-- ground under it, and all of them slid off together, by an amount that
+	-- changed as the map moved. Only on a notched phone, which is why no
+	-- desktop test ever saw it. The viewport is extended by hand instead
+	-- (ConquestClient.updateViewport), so nothing here needs the engine's help.
+	screen.SafeAreaCompatibility = Enum.SafeAreaCompatibility.None
+	local window = Instance.new("ScreenGui")
+	window.Name = "ConquestWindow"
+	window.ScreenInsets = Enum.ScreenInsets.None
+	window.ResetOnSpawn = false
+	window.Parent = screen.Parent
+	self.window = window
 
 	self.myColor = INK
 	self.bannerStr = nil :: string?
@@ -1275,78 +1330,22 @@ function HUD.new(screen: ScreenGui): HUD
 	-- shaped list of the same three choices, right where the eye lands to find
 	-- out what the row IS. The hotkeys still work regardless.
 	capCommit.Text = "ATTACK SIZE"
+	-- ONE FIXED SIZE (Config.ATTACK_PRESETS, 2026-09-27): no buttons to read
+	-- the percentage off, so the caption carries it. HUD.setPresets writes it.
+	self.capCommit = capCommit
 	-- The troop count is the only figure here, because it is the only one the
 	-- row does not already draw: the lit button underneath IS the percentage,
 	-- so a "50%" caption floating above a button reading "50%" was the same
 	-- number twice, three inches apart.
 	self.commitText = label(bar, "Commit", BAR_W, BAR_H, 386, 83, 158, 13, INK, Enum.TextXAlignment.Right)
 
-	-- THREE BUTTONS, where the slider (and briefly an automatic ladder) used
-	-- to be. Same strip, same 528 px -- but every pixel of it is now a target,
-	-- where the slider put the whole decision inside a 22 px knob.
-	--
-	-- Real TextButtons rather than Frames plus a hit test: a button consumes
-	-- its own click, so a press that lands here can never fall through to the
-	-- map and open a war where the player meant to change a setting.
-	local presets = Config.ATTACK_PRESETS or { 0.25, 0.5, 0.75 }
-	local btnGap = 6
-	local btnW = (528 - btnGap * (#presets - 1)) / #presets
+	-- The size buttons (if any) are built by HUD.setPresets, because which
+	-- list applies is a property of the ROUND (ranked draws three, a casual
+	-- round none) and this HUD outlives rounds.
 	self.presets = {}
-	for i, ratio in presets do
-		local b = Instance.new("TextButton")
-		b.Name = "Preset" .. i
-		b.BackgroundColor3 = TRACK
-		b.BorderSizePixel = 0
-		-- The three states below carry this; Roblox's own tint would fight
-		-- with the selected button being drawn in the player's map colour.
-		b.AutoButtonColor = false
-		b.FontFace = FONT_UI
-		b.TextScaled = true
-		b.TextColor3 = INK_DIM
-		b.Text = string.format("%d%%", math.floor(ratio * 100 + 0.5))
-		local tsc = Instance.new("UITextSizeConstraint")
-		tsc.MaxTextSize = 48
-		tsc.MinTextSize = 6
-		tsc.Parent = b
-		-- A TextButton is not built by `label`, so it needs the outline rule
-		-- applied by hand. Same reasoning, one size: the caption is ~13px.
-		local pstroke = Instance.new("UIStroke")
-		pstroke.Name = "PresetStroke"
-		pstroke.Color = Color3.new()
-		pstroke.Thickness = 1
-		pstroke.Transparency = 0.4
-		pstroke.LineJoinMode = Enum.LineJoinMode.Round
-		pstroke.Parent = b
-		-- Padding in SCALE, not offset: TextScaled fills the padded box, and a
-		-- pixel pad would be a different share of the button on every viewport.
-		local pad = Instance.new("UIPadding")
-		pad.PaddingTop = UDim.new(0.2, 0)
-		pad.PaddingBottom = UDim.new(0.2, 0)
-		pad.Parent = b
-		local corner = Instance.new("UICorner")
-		corner.CornerRadius = UDim.new(0, 3)
-		corner.Parent = b
-		place(b, BAR_W, BAR_H, 16 + (btnW + btnGap) * (i - 1), 96, btnW, 22)
-		b.Parent = bar
-		-- Hover is the only thing that says "pressable" BEFORE the press. The
-		-- selected one is skipped: it is already lit, and dimming it on hover
-		-- would read as deselecting it.
-		b.MouseEnter:Connect(function()
-			if self.presetIndex ~= i then
-				b.BackgroundColor3 = PANEL_HI
-			end
-		end)
-		b.MouseLeave:Connect(function()
-			if self.presetIndex ~= i then
-				b.BackgroundColor3 = TRACK
-			end
-		end)
-		self.presets[i] = { button = b, ratio = ratio }
-	end
-	-- 0, not 1: selectPreset short-circuits on an unchanged index, and the
-	-- first real call legitimately selects a button.
 	self.presetIndex = 0
 	self.bar = bar
+	HUD.setPresets(self, Config.ATTACK_PRESETS)
 
 	-- ========================================================= right rail ==
 	-- Real TextButtons, for the reason the size buttons are: a button eats its
@@ -1716,12 +1715,15 @@ function HUD.new(screen: ScreenGui): HUD
 	body.Parent = wrap
 	self.payBody = body
 
+	-- The banknote rides the hero figure (MoneyNote), so the caption drops the
+	-- word it now stands for.
 	label(body, "Cap", PAY_W, PAY_H, PAY_PAD, 14, PAY_INNER, 11, INK_OFF, Enum.TextXAlignment.Center).Text =
-		"MONEY EARNED"
+		"EARNED"
 	-- The hero figure, at the same 36px the army wears on the command bar:
 	-- this is the one number the card exists to deliver, and everything under
 	-- it is the receipt.
 	self.payTotal = label(body, "Total", PAY_W, PAY_H, PAY_PAD, 30, PAY_INNER, 36, GOLD, Enum.TextXAlignment.Center, FONT_DISPLAY)
+	MoneyNote.attach(self.payTotal)
 	box(body, "Rule", LINE, PAY_W, PAY_H, PAY_PAD, 78, PAY_INNER, 1).BackgroundTransparency = 0.4
 
 	self.payRows = {}
@@ -1779,7 +1781,14 @@ function HUD.setPayout(self: HUD, data: any?)
 		row.amount.Visible = on
 		if line then
 			n = i
-			row.label.Text = line.label
+			-- The server's "2x MONEY" / "3x MONEY" rows read "[note] 2x".
+			local rest, isMoney = MoneyNote.strip(line.label)
+			row.label.Text = rest
+			if isMoney then
+				MoneyNote.attach(row.label)
+			else
+				MoneyNote.off(row.label)
+			end
 			row.value.Text = line.value or ""
 			row.amount.Text = "+" .. commas(line.amount)
 		end
@@ -1788,7 +1797,7 @@ function HUD.setPayout(self: HUD, data: any?)
 	-- The card is exactly as tall as it has rows. `Body` keeps its authored
 	-- height and the wrap crops to the used part, so nothing stretches.
 	local used = PAY_TOP + n * PAY_ROW_H + PAY_FOOT
-	place(self.payout, REF_W, REF_H, PAY_X, PAY_Y, PAY_W, used)
+	place(self.payout, REF_W, REF_H, PAY_X, self.payY or PAY_Y, PAY_W, used)
 	self.payBody.Size = UDim2.fromScale(1, PAY_H / used)
 	place(self.payBalance, PAY_W, PAY_H, PAY_PAD, used - 24, PAY_INNER, 11)
 	-- A nil balance is a profile that did not load, not a balance of zero --
@@ -2023,6 +2032,17 @@ local function applyTutorial(self: HUD, state: any?)
 	-- rail button points -- and nothing is stripped back, hidden or held,
 	-- because the round is not a lesson; only this person's next tap is.
 	self.inTutorial = state ~= nil and state.lite ~= true
+	-- THE "+" CARD WAITS FOR THE BUILD LESSONS (owner, 2026-09-27: "make the
+	-- + card, for the buildings, pop up when city and port part of the
+	-- tutorial starts"). Latched like the rail's own unlock: once the city
+	-- card has arrived, the door stays on the rail for the rest of the round.
+	-- Read off `id`, which a `hidden` state still carries, so the card comes
+	-- in with the city lesson and not a beat before it.
+	local stepId = state and state.id
+	if stepId == "city" or stepId == "port" or stepId == "nuke" or stepId == "conquer"
+		or stepId == "done" or stepId == "failed" then
+		self.plusReady = true
+	end
 	-- THE RING GOES WITH THE CARD. ConquestClient draws the ring the card is
 	-- pointing at and installs this to be told what to ring -- from HERE, on
 	-- the state actually being applied, so a card held back by setTutorialHold
@@ -2258,6 +2278,26 @@ function restackTop(self: HUD)
 	end
 	place(self.alert, REF_W, REF_H, (REF_W - w) / 2, y, w, h)
 	y += h + 8
+	-- The winners' faces ride under the big banner and nowhere else.
+	local faces = self.winFaces
+	if faces ~= nil then
+		local show = self.bannerBig == true and self.bannerStr ~= nil and (self.winFaceCount or 0) > 0
+		faces.Visible = show
+		if show then
+			local fh = self.winFacesH or WIN_FACE.D
+			place(faces, REF_W, REF_H, (REF_W - WIN_W) / 2, y, WIN_W, fh)
+			y += fh + 8
+		end
+	end
+	-- THE RECEIPT GOES UNDER ALL OF IT (owner, 2026-10-02: the win banner and
+	-- the faces collided with the money card). PAY_Y is where the card sits
+	-- under an ordinary strip; the big banner plus a row of faces runs past
+	-- it, so the card steps down to clear them. Money3xClient places its line
+	-- off the card's own rect, so it follows for free.
+	self.payY = math.max(PAY_Y, y)
+	if self.payout ~= nil then
+		self.payout.Position = UDim2.fromScale(PAY_X / REF_W, self.payY / REF_H)
+	end
 	-- Centre-anchored (buildTutorial), so the position is the middle of the
 	-- rect that starts at `y`. Only the y moves; the pop tweens Size alone.
 	local card = self.tutorial
@@ -2288,11 +2328,20 @@ local function refreshAlert(self: HUD)
 	self.alertShown, self.alertShownColor, self.alertShownBig = str, color, big
 	if str == nil then
 		self.alert.Visible = false
+		if self.winFaces ~= nil then
+			self.winFaces.Visible = false
+		end
 		return
 	end
 	self.alert.Visible = true
 	self.alertText.Text = str
 	self.alertText.TextColor3 = color or INK
+	-- A victory paints the words through a gold UIGradient, which MULTIPLIES
+	-- the text colour -- so under it the ink has to be white or the gold
+	-- comes out twice and reads as brown. See HUD.setVictory.
+	if self.victory then
+		self.alertText.TextColor3 = Color3.new(1, 1, 1)
+	end
 	restackTop(self)
 end
 
@@ -2301,6 +2350,261 @@ end
 function HUD.setBanner(self: HUD, str: string?, color: Color3?, big: boolean?)
 	self.bannerStr, self.bannerColor, self.bannerBig = str, color, big == true
 	refreshAlert(self)
+end
+
+-- WHO TOOK THE MAP, FACE BY FACE. `list` is { userId?, name, color } per
+-- winner, best first: the winner alone, or the winning team's members. Each
+-- disc is drawn the way a standings row draws one -- a headshot inset in a
+-- ring of the empire's colour, or its initial on a filled disc for an AI --
+-- so the face here and the face on the board read as the same person. Names
+-- go under the discs only when there is more than one; a single winner is
+-- already named by the banner. nil or empty clears the row.
+function HUD.setWinners(self: HUD, list: { any }?)
+	local row = self.winFaces
+	if row == nil then
+		row = Instance.new("Frame")
+		row.Name = "WinFaces"
+		row.BackgroundTransparency = 1
+		row.Visible = false
+		row.Parent = self.alert.Parent
+		local lay = Instance.new("UIListLayout")
+		lay.FillDirection = Enum.FillDirection.Horizontal
+		lay.HorizontalAlignment = Enum.HorizontalAlignment.Center
+		lay.SortOrder = Enum.SortOrder.LayoutOrder
+		lay.Padding = UDim.new(WIN_FACE.GAP / WIN_W, 0)
+		lay.Parent = row
+		self.winFaces = row
+	end
+	for _, c in row:GetChildren() do
+		if c:IsA("GuiObject") then
+			c:Destroy()
+		end
+	end
+
+	local n = list and #list or 0
+	local captions = n > 1
+	local h = WIN_FACE.D + (captions and (WIN_FACE.CAP + 2) or 0)
+	self.winFacesH = h
+	self.winFaceCount = n
+
+	local function cell(i: number, color: Color3): Frame
+		local c = Instance.new("Frame")
+		c.Name = "F" .. i
+		c.BackgroundTransparency = 1
+		c.LayoutOrder = i
+		c.Size = UDim2.fromScale(WIN_FACE.D / WIN_W, 1)
+		c.Parent = row
+		local disc = Instance.new("Frame")
+		disc.Name = "Disc"
+		disc.BorderSizePixel = 0
+		disc.BackgroundColor3 = color
+		disc.Size = UDim2.fromScale(1, WIN_FACE.D / h)
+		disc.Parent = c
+		-- Not optional: the row is laid out in Scale, so off the 16:9
+		-- reference a "square" is a rectangle and the disc comes out an egg.
+		local ar = Instance.new("UIAspectRatioConstraint")
+		ar.AspectRatio = 1
+		ar.DominantAxis = Enum.DominantAxis.Height
+		ar.Parent = disc
+		local r = Instance.new("UICorner")
+		r.CornerRadius = UDim.new(1, 0)
+		r.Parent = disc
+		return c
+	end
+
+	local function caption(parent: GuiObject, text: string): TextLabel
+		local t = Instance.new("TextLabel")
+		t.Name = "Text"
+		t.BackgroundTransparency = 1
+		t.FontFace = FONT_DISPLAY
+		t.TextScaled = true
+		t.TextColor3 = INK
+		t.Text = text
+		t.ZIndex = 4
+		local s = Instance.new("UIStroke")
+		s.Color = Color3.new()
+		s.Thickness = 1
+		s.Transparency = 0.3
+		s.Parent = t
+		t.Parent = parent
+		return t
+	end
+
+	local shown = math.min(n, WIN_FACE.MAX)
+	for i = 1, shown do
+		local e = (list :: { any })[i]
+		local c = cell(i, e.color or INK)
+		local disc = c:FindFirstChild("Disc") :: Frame
+		local url = Faces.url(e.userId, 150)
+		if url then
+			local pic = Instance.new("ImageLabel")
+			pic.Name = "Pic"
+			pic.BackgroundColor3 = TRACK
+			pic.BorderSizePixel = 0
+			pic.ScaleType = Enum.ScaleType.Crop
+			pic.Image = url
+			pic.Size = UDim2.fromScale(0.86, 0.86)
+			pic.Position = UDim2.fromScale(0.07, 0.07)
+			-- ZIndexBehavior.Global: see the same 4 on the standings' headshots.
+			pic.ZIndex = 4
+			pic.Parent = disc
+			local pr = Instance.new("UICorner")
+			pr.CornerRadius = UDim.new(1, 0)
+			pr.Parent = pic
+		else
+			local ini = caption(disc, string.upper(string.sub(e.name or "?", 1, 1)))
+			ini.TextColor3 = PANEL
+			ini.Size = UDim2.fromScale(0.6, 0.6)
+			ini.Position = UDim2.fromScale(0.2, 0.2)
+		end
+		if captions then
+			local t = caption(c, clip(e.name or "?", 10))
+			t.Size = UDim2.fromScale(1.6, WIN_FACE.CAP / h)
+			t.Position = UDim2.fromScale(-0.3, (WIN_FACE.D + 2) / h)
+		end
+	end
+	if n > shown then
+		local c = cell(shown + 1, PANEL_HI)
+		local t = caption(c:FindFirstChild("Disc") :: Frame, "+" .. (n - shown))
+		t.Size = UDim2.fromScale(0.64, 0.4)
+		t.Position = UDim2.fromScale(0.18, 0.3)
+	end
+	self:paintVictoryRings()
+	restackTop(self)
+end
+
+-- THE WINNER'S ENDING (owner, 2026-10-02: "add a confetti effect on the winner
+-- clients screen, and make it look more appealing overall for the winner").
+-- Only a client whose empire took the map -- or whose TEAM did -- gets this;
+-- everyone else keeps the plain strip. All of it is dressing on what is
+-- already up, nothing new to lay out:
+--   * a gold flash across the whole screen, gone in a second;
+--   * the banner pops in, edged in gold, its words gold with a light sweeping
+--     across them every couple of seconds;
+--   * every winner's face gets a gold ring, and the row pops in after the
+--     banner;
+--   * confetti (Conquest.Confetti) -- cannons from both bottom corners, then
+--     a short rain.
+-- `false` takes all of it down again, for the next round.
+local VICTORY_GOLD = Color3.fromRGB(255, 208, 84)
+
+function HUD.paintVictoryRings(self: HUD)
+	local row = self.winFaces
+	if row == nil then
+		return
+	end
+	for _, d in row:GetDescendants() do
+		if d.Name == "Disc" and d:IsA("Frame") then
+			local ring = d:FindFirstChild("VictoryRing")
+			if self.victory and ring == nil then
+				local s = Instance.new("UIStroke")
+				s.Name = "VictoryRing"
+				s.Color = VICTORY_GOLD
+				s.Thickness = 3
+				s.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+				s.Parent = d
+			elseif not self.victory and ring ~= nil then
+				ring:Destroy()
+			end
+		end
+	end
+end
+
+function HUD.setVictory(self: HUD, on: boolean)
+	if (self.victory == true) == on then
+		return
+	end
+	self.victory = on
+
+	-- Down first, whichever way this is going.
+	for _, inst in self.victoryBits or {} do
+		inst:Destroy()
+	end
+	self.victoryBits = {}
+	for _, tw in self.victoryTweens or {} do
+		tw:Cancel()
+	end
+	self.victoryTweens = {}
+	if self.stopConfetti then
+		self.stopConfetti()
+		self.stopConfetti = nil
+	end
+	self:paintVictoryRings()
+	-- The banner's ink comes back on its own the next time refreshAlert
+	-- writes it; force that write rather than wait for a change.
+	self.alertShown = nil
+	refreshAlert(self)
+	if not on then
+		return
+	end
+
+	local bits, tweens = self.victoryBits, self.victoryTweens
+	local screen = self.alert.Parent :: Instance
+	local function own<T>(inst: T): T
+		table.insert(bits, inst :: any)
+		return inst
+	end
+	local function play(inst: Instance, info: TweenInfo, goal: { [string]: any })
+		local tw = TweenService:Create(inst, info, goal)
+		table.insert(tweens, tw)
+		tw:Play()
+		return tw
+	end
+
+	-- The flash. Over the map, under the HUD's own panels' words, and gone.
+	local flash = own(Instance.new("Frame"))
+	flash.Name = "VictoryFlash"
+	flash.BorderSizePixel = 0
+	flash.BackgroundColor3 = VICTORY_GOLD
+	flash.BackgroundTransparency = 0.45
+	flash.Size = UDim2.fromScale(1, 1)
+	flash.Active = false
+	flash.ZIndex = 30
+	flash.Parent = screen
+	play(flash, TweenInfo.new(1.1, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { BackgroundTransparency = 1 })
+
+	-- The banner: a gold edge, and gold words with a sheen running across.
+	local edge = own(Instance.new("UIStroke"))
+	edge.Name = "VictoryEdge"
+	edge.Color = VICTORY_GOLD
+	edge.Thickness = 2
+	edge.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+	edge.Parent = self.alert
+	play(edge, TweenInfo.new(0.9, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true), { Transparency = 0.6 })
+
+	local sheen = own(Instance.new("UIGradient"))
+	sheen.Name = "VictorySheen"
+	sheen.Color = ColorSequence.new({
+		ColorSequenceKeypoint.new(0, VICTORY_GOLD),
+		ColorSequenceKeypoint.new(0.42, VICTORY_GOLD),
+		ColorSequenceKeypoint.new(0.5, Color3.new(1, 1, 1)),
+		ColorSequenceKeypoint.new(0.58, VICTORY_GOLD),
+		ColorSequenceKeypoint.new(1, VICTORY_GOLD),
+	})
+	sheen.Rotation = 20
+	sheen.Offset = Vector2.new(-1, 0)
+	sheen.Parent = self.alertText
+	play(sheen, TweenInfo.new(1.4, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, false, 1.2), {
+		Offset = Vector2.new(1, 0),
+	})
+
+	-- The pop: the banner first, the faces a beat behind it. UIScale only for
+	-- the length of the tween -- see the header on why this HUD keeps none.
+	local function pop(target: GuiObject?, delay: number)
+		if target == nil then
+			return
+		end
+		local s = own(Instance.new("UIScale"))
+		s.Name = "VictoryPop"
+		s.Scale = 0.35
+		s.Parent = target
+		play(s, TweenInfo.new(0.55, Enum.EasingStyle.Back, Enum.EasingDirection.Out, 0, false, delay), { Scale = 1 })
+	end
+	pop(self.alert, 0)
+	pop(self.winFaces, 0.18)
+
+	local Confetti = require(script.Parent.Confetti) :: any
+	self.stopConfetti = Confetti.burst(screen, 40)
 end
 
 -- "PLAYER" is the client's idle value; an idle state is not news, so it
@@ -2505,14 +2809,92 @@ end
 -- The HUD owns what a press LOOKS like; the client owns what it MEANS (it is
 -- the thing holding the intent remote). One connection per button, made once.
 function HUD.bindPresets(self: HUD, fn: (number) -> ())
-	for _, p in self.presets do
-		p.button.Activated:Connect(function()
-			-- The press SOUNDS here for the same reason it LOOKS pressed here:
-			-- this module owns what a press is, and the client owns what it
-			-- means. A preset that the client then ignores still clicked.
-			Sfx.play("Click")
-			fn(p.ratio)
+	-- Stored, not connected: setPresets rebuilds the buttons per round and
+	-- each new button reads this when pressed.
+	self.presetFn = fn
+end
+
+-- THE SIZE BUTTONS FOR THIS ROUND (2026-10-05). A one-entry list draws no
+-- buttons -- the caption carries the fixed size -- and a longer one (ranked's
+-- 25 / 50 / 75) draws a row on the caption's own line, between ATTACK SIZE and
+-- the troop count, because the 2026-09-27 bar has no row left under it.
+-- Real TextButtons rather than Frames plus a hit test: a button consumes its
+-- own click, so a press that lands here can never fall through to the map and
+-- open a war where the player meant to change a setting.
+function HUD.setPresets(self: HUD, list: { number }?)
+	local presets = list or {}
+	if self.presetList == presets then
+		return
+	end
+	self.presetList = presets
+	for _, p in self.presets or {} do
+		p.button:Destroy()
+	end
+	self.presets = {}
+	self.presetIndex = 0
+	self.capCommit.Text = if #presets == 1
+		then string.format("ATTACK SIZE  %d%%", math.floor(presets[1] * 100 + 0.5))
+		else "ATTACK SIZE"
+	if #presets < 2 then
+		return
+	end
+	local x0, x1, gap = 120, 378, 6
+	local btnW = (x1 - x0 - gap * (#presets - 1)) / #presets
+	for i, ratio in presets do
+		local b = Instance.new("TextButton")
+		b.Name = "Preset" .. i
+		b.BackgroundColor3 = TRACK
+		b.BorderSizePixel = 0
+		-- The selected state carries this; Roblox's own tint would fight
+		-- with the selected button being drawn in the player's map colour.
+		b.AutoButtonColor = false
+		b.FontFace = FONT_UI
+		b.TextScaled = true
+		b.TextColor3 = INK_DIM
+		b.Text = string.format("%d%%", math.floor(ratio * 100 + 0.5))
+		local tsc = Instance.new("UITextSizeConstraint")
+		tsc.MaxTextSize = 48
+		tsc.MinTextSize = 6
+		tsc.Parent = b
+		-- A TextButton is not built by `label`, so the outline rule by hand.
+		local pstroke = Instance.new("UIStroke")
+		pstroke.Name = "PresetStroke"
+		pstroke.Color = Color3.new()
+		pstroke.Thickness = 1
+		pstroke.Transparency = 0.4
+		pstroke.LineJoinMode = Enum.LineJoinMode.Round
+		pstroke.Parent = b
+		-- Padding in SCALE, not offset: TextScaled fills the padded box.
+		local pad = Instance.new("UIPadding")
+		pad.PaddingTop = UDim.new(0.15, 0)
+		pad.PaddingBottom = UDim.new(0.15, 0)
+		pad.Parent = b
+		local corner = Instance.new("UICorner")
+		corner.CornerRadius = UDim.new(0, 3)
+		corner.Parent = b
+		place(b, BAR_W, BAR_H, x0 + (btnW + gap) * (i - 1), 80, btnW, 19)
+		b.Parent = self.bar
+		-- Hover says "pressable" before the press; the lit one is skipped,
+		-- since dimming it would read as deselecting it.
+		b.MouseEnter:Connect(function()
+			if self.presetIndex ~= i then
+				b.BackgroundColor3 = PANEL_HI
+			end
 		end)
+		b.MouseLeave:Connect(function()
+			if self.presetIndex ~= i then
+				b.BackgroundColor3 = TRACK
+			end
+		end)
+		b.Activated:Connect(function()
+			-- The press SOUNDS here for the reason it LOOKS pressed here: this
+			-- module owns what a press is, the client owns what it means.
+			Sfx.play("Click")
+			if self.presetFn then
+				self.presetFn(ratio)
+			end
+		end)
+		self.presets[i] = { button = b, ratio = ratio }
 	end
 end
 
@@ -3110,6 +3492,9 @@ function HUD.setActions(self: HUD, armed: string?, costs: { [string]: number }?,
 		local vis = not (a.tutHide and tutorialRound(self) and freeFor(self, a.id) == 0)
 			and (a.unlockedOnce == true or not tutorialRound(self))
 			and (a.pass == nil or self.passes[a.pass] == true)
+			-- The "+" card: off the rail in a lesson round until the city card
+			-- (see applyTutorial, plusReady).
+			and (not a.plus or not tutorialRound(self) or self.plusReady == true)
 		if vis then
 			shown[#shown + 1] = a
 		end
@@ -3127,7 +3512,36 @@ function HUD.setActions(self: HUD, armed: string?, costs: { [string]: number }?,
 		for _, a in shown do
 			a.button.Visible = true
 		end
+		-- A relayout mid-pop (the city card unlocking on the same beat) must
+		-- win, or the tween would finish at the old slot.
+		if self.plusTween then
+			self.plusTween:Cancel()
+			self.plusTween = nil
+		end
 		layoutRail(self, shown)
+		-- ...AND IT POPS IN when it arrives in a lesson round: grown out of its
+		-- own centre with a Back overshoot, so the new door reads as an event.
+		-- Once only (plusPopped); a round that never hid it never pops it.
+		if tutorialRound(self) and self.plusReady and not self.plusPopped then
+			for _, a in shown do
+				if a.plus then
+					self.plusPopped = true
+					local b = a.button
+					local size, pos = b.Size, b.Position
+					local s = 0.3
+					b.Size = UDim2.fromScale(size.X.Scale * s, size.Y.Scale * s)
+					b.Position = UDim2.fromScale(
+						pos.X.Scale + size.X.Scale * (1 - s) / 2,
+						pos.Y.Scale + size.Y.Scale * (1 - s) / 2
+					)
+					self.plusTween = TweenService:Create(b, TweenInfo.new(0.35, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
+						Size = size,
+						Position = pos,
+					})
+					self.plusTween:Play()
+				end
+			end
+		end
 	end
 	for _, a in self.actions do
 		local cost = costs and costs[a.id]
@@ -3337,19 +3751,44 @@ function HUD.layout(self: HUD, viewW: number, viewH: number)
 	-- everything else on this HUD, so it still rides a resize.
 	if self.padHints then
 		local inset = GuiService:GetGuiInset().Y
-		self.padHints.frame.Position = UDim2.fromScale(PAD_X / REF_W, inset / math.max(viewH, 1) + PAD_GAP / REF_H)
+		-- Against THIS gui's height, not the viewport's: the two differ by the
+		-- device safe area now (see HUD.new).
+		local _, t, _, b = HUD.safeInsets(self)
+		self.padHints.frame.Position = UDim2.fromScale(PAD_X / REF_W, inset / math.max(viewH - t - b, 1) + PAD_GAP / REF_H)
 	end
 end
 
--- The two bands above, in VIEWPORT px. Everything on this HUD is authored in
--- Scale against REF_H, so one factor converts. Read by ConquestClient on every
--- viewport change and handed straight to Camera2D.setInsets.
-function HUD.insets(self: HUD, viewW: number, viewH: number): (number, number)
-	local s = viewH / REF_H
-	return TOP_BAND * s, (REF_H - BAR_Y) * s
+-- How far the device's safe area sits in from each edge of the window, in px:
+-- left, top, right, bottom. Zero everywhere but a notched / rounded phone.
+function HUD.safeInsets(self: HUD): (number, number, number, number)
+	local fp, fs = self.window.AbsolutePosition, self.window.AbsoluteSize
+	local sp, ss = self.screen.AbsolutePosition, self.screen.AbsoluteSize
+	if fs.X <= 0 or ss.X <= 0 then
+		return 0, 0, 0, 0
+	end
+	return math.max(sp.X - fp.X, 0),
+		math.max(sp.Y - fp.Y, 0),
+		math.max(fp.X + fs.X - sp.X - ss.X, 0),
+		math.max(fp.Y + fs.Y - sp.Y - ss.Y, 0)
 end
 
+-- The two bands above, in VIEWPORT px, plus the side insets. Everything on this
+-- HUD is authored in Scale against REF_H of THIS gui, which is the viewport
+-- less the safe area, so the bands are measured from the safe edge and the
+-- inset is added back. Read by ConquestClient on every viewport change and
+-- handed to Camera2D.setInsets as top, bottom, left, right.
+function HUD.insets(self: HUD, viewW: number, viewH: number): (number, number, number, number)
+	local l, t, r, b = HUD.safeInsets(self)
+	local s = math.max(viewH - t - b, 1) / REF_H
+	return t + TOP_BAND * s, b + (REF_H - BAR_Y) * s, l, r
+end
+
+-- (x, y) and the size arrive in VIEWPORT space; the card is placed in this
+-- gui's space, which starts at the safe area's corner.
 function HUD.moveHover(self: HUD, x: number, y: number, viewW: number, viewH: number)
+	local l, t, r, b = HUD.safeInsets(self)
+	x, y = x - l, y - t
+	viewW, viewH = viewW - l - r, viewH - t - b
 	local w, h = self.hover.AbsoluteSize.X, self.hover.AbsoluteSize.Y
 	local px, py = x + 16, y + 16
 	if px + w > viewW - 8 then
@@ -3742,7 +4181,9 @@ function HUD.setStandings(self: HUD, list: { any }, myId: number)
 		set("Rank", "#" .. rank, e.alive and INK_DIM or INK_MUTE)
 		-- In a team round the side a row belongs to has to be readable without
 		-- cross-referencing, so the name carries the team colour.
-		set("Name", clip(e.name, 14), e.team and e.alive and Palette.teamColor3(e.team) or nil)
+		set("Name", clip(e.name, 12), e.team and e.alive and Palette.teamColor3(e.team) or nil)
+		local wins = tonumber(e.wins)
+		set("Wins", (wins and wins > 0) and tostring(wins) or "", e.alive and GOLD or INK_MUTE)
 		-- The one figure that moves every update is drawn from its SMOOTHED
 		-- value and kept current by step().
 		set("Land", string.format("%.1f%%", self.pctShown[e.id] or 0))
@@ -4024,4 +4465,118 @@ function HUD.step(self: HUD, dt: number)
 	end
 end
 
+
+-- ============================================================= recenter ==
+
+-- THE TARGET BUTTON (2026-10-02, owner: "beside these buttons, I want a target
+-- button that refocuses your camera back to your land so you dont get lost").
+-- "These buttons" are Roblox's own -- the logo, the menu and the chat bubble,
+-- top-left -- so it lives in THEIR row, drawn like them: a 44px dark round
+-- button with a white line icon. TopbarSafeInsets is the engine's own answer
+-- to "where may a game put a button beside those": it places this gui in the
+-- strip right of them, on every device, notch or not. `onPress` is the
+-- client's; this only draws and reports.
+function HUD.recenterButton(self: HUD, onPress: () -> ())
+	local bar = Instance.new("ScreenGui")
+	bar.Name = "ConquestTopbar"
+	bar.ScreenInsets = Enum.ScreenInsets.TopbarSafeInsets
+	bar.ResetOnSpawn = false
+	bar.DisplayOrder = 50
+	bar.Parent = self.screen.Parent
+
+	-- ALL IN SCALE, and ALIGNED TO ROBLOX'S OWN (owner, 2026-10-02: "ensure to
+	-- use scale for this button, and make it aligned with the other buttons").
+	-- The strip is the topbar's height (58 on the current topbar); Roblox's
+	-- buttons are 44 of it, starting 12 down -- so this one is the same two
+	-- fractions of whatever height the strip really is. Centring it in the
+	-- strip put it 5px above theirs. RelativeYY keeps it round: both axes are
+	-- fractions of the strip's HEIGHT.
+	--
+	-- THE GAP, ALSO IN SCALE (owner, 2026-10-02: "add a bit of a margin between
+	-- these 2 buttons"): the same 9-in-44 Roblox leaves between its logo and
+	-- its menu pill. A Position's X scale is a share of the strip's WIDTH, so
+	-- the gap rides in a holder sized off the strip's height (RelativeYY) that
+	-- is exactly gap + button wide, and the button sits at its right end.
+	--
+	-- AND THEIR COLOUR (same message: "colour isnt right"): Roblox's plates are
+	-- a near-opaque charcoal, not a see-through black -- through 0.3 black the
+	-- map tinted this one brown beside them.
+	local TOPBAR_BTN, TOPBAR_TOP, TOPBAR_GAP = 44 / 58, 12 / 58, 9 / 58
+	local PLATE = Color3.fromRGB(28, 28, 31)
+	local PLATE_HOVER = Color3.fromRGB(48, 48, 52)
+	local holder = Instance.new("Frame")
+	holder.Name = "RecenterSlot"
+	holder.BackgroundTransparency = 1
+	holder.SizeConstraint = Enum.SizeConstraint.RelativeYY
+	holder.Size = UDim2.fromScale(TOPBAR_GAP + TOPBAR_BTN, 1)
+	holder.Parent = bar
+	local b = Instance.new("ImageButton")
+	b.Name = "Recenter"
+	b.Image = ""
+	b.AutoButtonColor = false
+	b.BackgroundColor3 = PLATE
+	b.BackgroundTransparency = 0.05
+	b.BorderSizePixel = 0
+	b.Size = UDim2.fromScale(TOPBAR_BTN / (TOPBAR_GAP + TOPBAR_BTN), TOPBAR_BTN)
+	b.Position = UDim2.fromScale(TOPBAR_GAP / (TOPBAR_GAP + TOPBAR_BTN), TOPBAR_TOP)
+	b.Parent = holder
+	local round = Instance.new("UICorner")
+	round.CornerRadius = UDim.new(1, 0)
+	round.Parent = b
+
+	-- The icon: a ring, a dot, and four ticks through the ring -- the same
+	-- white line weight Roblox's own icons use. Every number is out of the
+	-- 44px button, as a fraction of it.
+	local function part(name: string, x: number, y: number, w: number, h: number): Frame
+		local f = Instance.new("Frame")
+		f.Name = name
+		f.BackgroundColor3 = Color3.new(1, 1, 1)
+		f.BorderSizePixel = 0
+		f.AnchorPoint = Vector2.new(0.5, 0.5)
+		f.Position = UDim2.fromScale(0.5 + x / 44, 0.5 + y / 44)
+		f.Size = UDim2.fromScale(w / 44, h / 44)
+		f.Parent = b
+		return f
+	end
+	local ring = part("Ring", 0, 0, 20, 20)
+	ring.BackgroundTransparency = 1
+	local ringRound = Instance.new("UICorner")
+	ringRound.CornerRadius = UDim.new(1, 0)
+	ringRound.Parent = ring
+	-- A stroke is drawn in pixels whatever the gui's scale, so its thickness is
+	-- re-derived from the button's real size: 2 of every 44.
+	local ringLine = Instance.new("UIStroke")
+	ringLine.Color = Color3.new(1, 1, 1)
+	ringLine.Thickness = 2
+	ringLine.Parent = ring
+	b:GetPropertyChangedSignal("AbsoluteSize"):Connect(function()
+		ringLine.Thickness = math.max(1, b.AbsoluteSize.Y * 2 / 44)
+	end)
+	local dot = part("Dot", 0, 0, 6, 6)
+	local dotRound = Instance.new("UICorner")
+	dotRound.CornerRadius = UDim.new(1, 0)
+	dotRound.Parent = dot
+	part("TickN", 0, -12, 2, 7)
+	part("TickS", 0, 12, 2, 7)
+	part("TickW", -12, 0, 7, 2)
+	part("TickE", 12, 0, 7, 2)
+
+	-- Hover lifts the plate the way Roblox's do; a press dips it.
+	b.MouseEnter:Connect(function()
+		b.BackgroundColor3 = PLATE_HOVER
+	end)
+	b.MouseLeave:Connect(function()
+		b.BackgroundColor3 = PLATE
+	end)
+	b.MouseButton1Down:Connect(function()
+		b.BackgroundColor3 = PLATE
+	end)
+	b.MouseButton1Up:Connect(function()
+		b.BackgroundColor3 = PLATE_HOVER
+	end)
+	b.Activated:Connect(onPress)
+
+	self.recenter = b
+	return b
+end
 return HUD

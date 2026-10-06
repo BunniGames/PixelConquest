@@ -209,6 +209,28 @@ local function hashOf(s: string): number
 	return h
 end
 
+-- THE BIG CARDS ARE HALF PHANTOM (2026-09-29, owner: "for 12 player games,
+-- have 6 npcs posing as real players. 24, have 12 ... 36 ... 18", then "cards
+-- start normally distributed around half ... sometimes 4 for 6 sometimes 8").
+-- A card of HALF_FROM seats or more draws its phantoms from a normal curve
+-- centred on half its cap, one standard deviation a twelfth of the cap -- so a
+-- twelve reads 4 to 8 fake seats, a twenty-four 8 to 16, a thirty-six 12 to
+-- 24 -- clamped at a third and two thirds so the tails never make a card that
+-- is all phantom or none. Smaller cards keep PHANTOM_MIN..PHANTOM_MAX.
+--
+-- Same rule as the small draw: derived from the record's id, so every server
+-- draws the same number with nothing stored. Two hashes of the id are the two
+-- uniforms Box-Muller needs.
+Matchmaker.HALF_FROM = 12
+
+function Matchmaker.halfDraw(id: string, cap: number): number
+	local u1 = (hashOf(id) % 100000 + 0.5) / 100000
+	local u2 = (hashOf(id .. "#") % 100000 + 0.5) / 100000
+	local z = math.sqrt(-2 * math.log(u1)) * math.cos(2 * math.pi * u2)
+	local n = math.floor(cap / 2 + z * cap / 12 + 0.5)
+	return math.clamp(n, math.ceil(cap / 3), math.floor(cap * 2 / 3))
+end
+
 -- WHAT A STUDIO SESSION IS. `game.PrivateServerId` is empty in Studio, so
 -- without this every playtest would be a lobby server whose countdown reaches
 -- zero and then fails at ReserveServer, which does not exist in Studio either.
@@ -384,6 +406,34 @@ Matchmaker.SLOTS = {
 -- there is paceBoard's business, below.
 Matchmaker.MIN_SLOTS = 7
 Matchmaker.LOAD_PER_SLOT = 2
+
+-- THE EURASIA LOBBY IS ALWAYS UP (owner, 2026-09-25: "always ensure there will
+-- always be 1 eurasia ... shown as one of the maps"). One slot is pinned to it:
+-- every card that slot mints is Eurasia free-for-all, whatever the draw or
+-- Demand would have dealt, and no OTHER slot may draw Eurasia -- so the board
+-- holds exactly one, and the six real seats are never split across two cards.
+-- The pin is slot 7 because it is the last of the MIN_SLOTS, which are never
+-- retired (so the card cannot disappear on a quiet hour), and it is a flex
+-- extra rather than one of the three fixed rungs, so SKIRMISH / BATTLE / WORLD
+-- WAR keep their sizes. It is not forced onto the front page: rankBoard shows
+-- it there when it ranks, and SEE ALL GAMES always lists it. `slot` MUST stay
+-- <= MIN_SLOTS. `size` only names the card (the WORLD WAR rung); the seats come
+-- from EurasiaMap.CARD_SEATS.
+Matchmaker.PINNED = { slot = 7, map = "eurasia", mode = "ffa", size = 24 }
+
+-- THE ADMIN ABUSE LOBBY IS ALWAYS UP (2026-10-02, owner: "there should always
+-- be an admin abuse card there"). Same idea as PINNED, but only the MODE is
+-- pinned: every card slot 6 mints is ADMIN ABUSE (Modes `nuclear`), on a map
+-- no other card is showing, at whatever size Demand asks of the slot. No OTHER
+-- slot may draw the mode, so the board holds exactly one, and it does NOT
+-- count as "a special is up" for drawPair -- the other specials still turn up
+-- now and then beside it. LobbyUI.rankBoard puts it on the big card
+-- (Modes.FEATURED). `slot` MUST stay <= MIN_SLOTS and differ from PINNED's.
+--
+-- OFF (2026-10-03, owner: remove admin abuse from being displayed). slot 0
+-- matches no slot, so no card is minted as it; the mode stays excluded from
+-- every other slot's draw, so the public board never shows it at all.
+Matchmaker.PINNED_MODE = { slot = 0, mode = "nuclear" }
 
 function Matchmaker.slotsFor(joinsPerHour: number): number
 	local perSlot = Matchmaker.LOAD_PER_SLOT * (3600 / Matchmaker.COUNTDOWN)
@@ -626,6 +676,10 @@ end
 -- special up 16.2% of the time. Same harness, same three rungs.
 Matchmaker.HISTORICAL_WEIGHT = 1
 
+-- THE SHARE OF SCENARIO DRAWS THAT STAY SCENARIOS. The rest keep the map and
+-- take one of its ordinary modes instead -- see the end of drawPair.
+Matchmaker.HISTORICAL_KEEP = 0.5
+
 -- THE SPECIAL PAIRINGS (2026-09-18, owner: "special modes that occasionally
 -- appear ... Starting 1 Million Gold. Starting 1 Million Army ... Everyone
 -- starts with 10 Nukes"): every special mode (Modes.SPECIAL) on every rotation
@@ -684,7 +738,7 @@ function Matchmaker.drawPair(used: { { map: string, mode: string } }?, freshMap:
 		pairSeen[Matchmaker.pairKey(u.map, u.mode)] = true
 		mapSeen[u.map] = true
 		modeSeen[modeBucket(u.mode)] = true
-		specialUp = specialUp or Modes.isSpecial(u.mode)
+		specialUp = specialUp or (Modes.isSpecial(u.mode) and u.mode ~= Matchmaker.PINNED_MODE.mode)
 	end
 	-- A SPECIAL CARD, NOW AND THEN (2026-09-18). ONE at a time -- a special
 	-- anywhere on the board rules them all out of this draw -- and otherwise a
@@ -708,7 +762,9 @@ function Matchmaker.drawPair(used: { { map: string, mode: string } }?, freshMap:
 	if not specialUp and math.random() < Matchmaker.SPECIAL_CHANCE then
 		local sDistinct, sNewMap = {}, {}
 		for _, p in Matchmaker.specialPairs() do
-			if not pairSeen[Matchmaker.pairKey(p.map, p.mode)] then
+			-- The pinned mode belongs to its own slot; see PINNED_MODE.
+			if p.map ~= Matchmaker.PINNED.map and p.mode ~= Matchmaker.PINNED_MODE.mode
+				and not pairSeen[Matchmaker.pairKey(p.map, p.mode)] then
 				table.insert(sDistinct, p)
 				if not mapSeen[p.map] then
 					table.insert(sNewMap, p)
@@ -727,7 +783,8 @@ function Matchmaker.drawPair(used: { { map: string, mode: string } }?, freshMap:
 	-- freshMap draw fall back on the MODE without ever falling back on the map.
 	local distinct, newMap, fresh = {}, {}, {}
 	for _, p in all do
-		if not pairSeen[Matchmaker.pairKey(p.map, p.mode)] then
+		-- The pinned map belongs to its own slot; see Matchmaker.PINNED.
+		if p.map ~= Matchmaker.PINNED.map and not pairSeen[Matchmaker.pairKey(p.map, p.mode)] then
 			-- Weighted by repetition: see HISTORICAL_WEIGHT.
 			local copies = if Modes.isHistorical(p.mode) then Matchmaker.HISTORICAL_WEIGHT else 1
 			for _ = 1, copies do
@@ -756,10 +813,42 @@ function Matchmaker.drawPair(used: { { map: string, mode: string } }?, freshMap:
 		pool = #fresh > 0 and fresh or (#newMap > 0 and newMap or (#distinct > 0 and distinct or all))
 	end
 	local pick = pool[math.random(1, #pool)]
+	-- A SCENARIO MAP STILL PLAYS ITS ORDINARY MODES (2026-10-02, owner: "in the
+	-- world map, i think only historical is being shown"). Once FFA, duo and
+	-- trio are all on the board -- which is nearly always -- the historical
+	-- bucket is the only fresh mode left, so a map with a scenario (the World
+	-- has two) came up as history every time. On the coin's other face the
+	-- MAP is kept and the mode is redrawn from its ordinary pairings.
+	if Modes.isHistorical(pick.mode) and math.random() >= Matchmaker.HISTORICAL_KEEP then
+		local plain = {}
+		for _, p in all do
+			if p.map == pick.map and not Modes.isHistorical(p.mode)
+				and not pairSeen[Matchmaker.pairKey(p.map, p.mode)] then
+				table.insert(plain, p)
+			end
+		end
+		if #plain > 0 then
+			pick = plain[math.random(1, #plain)]
+		end
+	end
 	return pick.map, pick.mode
 end
 
 -- ------------------------------------------------------------ lifecycle ----
+
+-- THE 36 (2026-09-29, owner: "have 36 player modes where 18 players are npcs
+-- posing as players. make 36 player one on europe map", as an occasional
+-- extra). Not a rung of the ladder -- Demand never asks for it and a fixed
+-- slot never becomes it. Each time a FLEX slot is minted, with no 36 already
+-- up and Europe on no other card, a GRAND_CHANCE coin makes it the 36 on
+-- Europe in one of the rotation modes (no historical: a scenario's roster is
+-- its own nations, and no special). It is named WORLD WAR, like the 24.
+--
+-- By the closed form under drawPair, n*c / (1 + (n-1)*c): with the six flex
+-- slots of a quiet board a 36 is up about a third of the time at 0.08.
+Matchmaker.GRAND_SIZE = 36
+Matchmaker.GRAND_MAP = "europe"
+Matchmaker.GRAND_CHANCE = 0.08
 
 local idCounter = 0
 
@@ -770,9 +859,20 @@ local idCounter = 0
 -- an unreachable MemoryStore costs the board nothing but its steering.
 export type Want = { size: number?, pair: string? }
 
-function Matchmaker.newRecord(slotIndex: number, used: { { map: string, mode: string } }?, want: Want?): Record
+function Matchmaker.newRecord(slotIndex: number, used: { { map: string, mode: string, size: number? } }?, want: Want?): Record
 	local slot = Matchmaker.SLOTS[slotIndex]
 	local map, mode = Matchmaker.drawPair(used, slot.flex)
+	-- THE FIXED 12 AND 24 STAY 12 AND 24 (2026-09-29, owner: ensure those
+	-- always exist). A map cap (Korea 2, the Philippines 6) would shrink the
+	-- rung to a card the ladder already has, so a fixed rung redraws past it.
+	if not slot.flex and slot.cap > Matchmaker.SLOTS[1].cap then
+		for _ = 1, 12 do
+			if Matchmaker.cardCap(map, slot.cap) >= slot.cap then
+				break
+			end
+			map, mode = Matchmaker.drawPair(used, false)
+		end
+	end
 	-- THE DEMAND PICK, AND ONLY FOR A FLEX SLOT. A pairing that does not parse
 	-- into a real map and a real mode is dropped rather than repaired: the draw
 	-- above already ran and is a perfectly good card.
@@ -795,10 +895,12 @@ function Matchmaker.newRecord(slotIndex: number, used: { { map: string, mode: st
 			local taken, specialUp = {}, false
 			for _, u in used or {} do
 				taken[u.map] = true
-				specialUp = specialUp or Modes.isSpecial(u.mode)
+				specialUp = specialUp or (Modes.isSpecial(u.mode) and u.mode ~= Matchmaker.PINNED_MODE.mode)
 			end
 			local m, g = string.match(want.pair, "^(.-)|(.+)$")
 			if m and g and table.find(Maps.ORDER, m) and Modes.exists(g) and not taken[m]
+				and m ~= Matchmaker.PINNED.map
+				and g ~= Matchmaker.PINNED_MODE.mode
 				and Matchmaker.mapAllows(m, g)
 				and not (Modes.isSpecial(g) and specialUp) then
 				map, mode = m, g
@@ -813,6 +915,55 @@ function Matchmaker.newRecord(slotIndex: number, used: { { map: string, mode: st
 	-- round makes faux empires only for the phantoms its card advertised. The
 	-- figure already travels the wire -- `wire` writes rec.cap and `readWire`
 	-- reads it back as e[3].
+	-- THE PINNED SLOT IGNORES ALL OF THE ABOVE. See Matchmaker.PINNED.
+	if slotIndex == Matchmaker.PINNED.slot then
+		map, mode, size = Matchmaker.PINNED.map, Matchmaker.PINNED.mode, Matchmaker.PINNED.size
+	end
+	-- THE ADMIN ABUSE SLOT KEEPS ITS SIZE BUT NOT ITS PAIRING. See PINNED_MODE.
+	-- A map no other card shows that holds the slot's full size (so the big
+	-- card is never Korea's 1v1), among those the mode is allowed on; failing
+	-- that, any of those maps.
+	local pinnedMode = slotIndex == Matchmaker.PINNED_MODE.slot
+	if pinnedMode then
+		local g = Matchmaker.PINNED_MODE.mode
+		local taken = {}
+		for _, u in used or {} do
+			taken[u.map] = true
+		end
+		local fresh, any = {}, {}
+		for _, m in Maps.ORDER do
+			if m ~= Matchmaker.PINNED.map and Matchmaker.mapAllows(m, g) then
+				table.insert(any, m)
+				if not taken[m] and Matchmaker.cardCap(m, size) >= size then
+					table.insert(fresh, m)
+				end
+			end
+		end
+		local pool = if #fresh > 0 then fresh else any
+		if #pool > 0 then
+			map, mode = pool[math.random(1, #pool)], g
+		end
+	end
+	-- THE OCCASIONAL 36, over whatever demand picked. See GRAND_CHANCE.
+	if slot.flex and not pinnedMode then
+		local grandUp, grandMapTaken = false, false
+		for _, u in used or {} do
+			grandUp = grandUp or u.size == Matchmaker.GRAND_SIZE
+			grandMapTaken = grandMapTaken or u.map == Matchmaker.GRAND_MAP
+		end
+		if not grandUp and not grandMapTaken and math.random() < Matchmaker.GRAND_CHANCE then
+			local modes = {}
+			for _, g in Modes.ORDER do
+				if Matchmaker.mapAllows(Matchmaker.GRAND_MAP, g) then
+					table.insert(modes, g)
+				end
+			end
+			if #modes > 0 then
+				map, mode = Matchmaker.GRAND_MAP, modes[math.random(1, #modes)]
+				size = Matchmaker.GRAND_SIZE
+			end
+		end
+	end
 	local cap = Matchmaker.cardCap(map, size)
 	idCounter += 1
 	return {
@@ -864,7 +1015,7 @@ function Matchmaker.mapCap(map: string?): number?
 end
 
 -- The seats a card on this map advertises, given the rung it was minted at.
--- A map stating CARD_SEATS (Eurasia, 72) overrides the rung outright -- its
+-- A map stating CARD_SEATS (Eurasia, 66) overrides the rung outright -- its
 -- faux seats fill most of it, see `phantoms`. Otherwise the rung, lowered to
 -- the map's MAX_EMPIRES.
 function Matchmaker.cardCap(map: string, size: number): number
@@ -894,7 +1045,7 @@ end
 -- card breathes like any other six-seat card. The rule is the cap against the
 -- draw, not the presence of a cap.
 function Matchmaker.phantoms(rec: Record): number
-	-- A CARD_SEATS MAP SHOWS ITS WHOLE FAUX ROSTER (Eurasia: 66 of 72), so the
+	-- A CARD_SEATS MAP SHOWS ITS WHOLE FAUX ROSTER (Eurasia: 60 of 66), so the
 	-- card reads as the packed round it launches and leaves six real seats.
 	local mapDef = Maps.get(rec.map) :: any
 	if mapDef.CARD_SEATS and mapDef.FAUX then
@@ -904,8 +1055,13 @@ function Matchmaker.phantoms(rec: Record): number
 	if cap ~= nil and cap <= Matchmaker.PHANTOM_MAX then
 		return 0
 	end
-	local span = Matchmaker.PHANTOM_MAX - Matchmaker.PHANTOM_MIN + 1
-	local n = Matchmaker.PHANTOM_MIN + hashOf(rec.id or "") % span
+	local n
+	if rec.cap >= Matchmaker.HALF_FROM then
+		n = Matchmaker.halfDraw(rec.id or "", rec.cap)
+	else
+		local span = Matchmaker.PHANTOM_MAX - Matchmaker.PHANTOM_MIN + 1
+		n = Matchmaker.PHANTOM_MIN + hashOf(rec.id or "") % span
+	end
 	return math.clamp(n, 0, math.max(0, rec.cap - Matchmaker.count(rec)))
 end
 
@@ -1121,6 +1277,10 @@ export type CardView = {
 	-- A special opening (Modes.SPECIAL), which the card draws as the same pill
 	-- in gold.
 	special: boolean,
+	-- The mode's second line (Modes.SUBTITLE), drawn under the pill, or nil.
+	subtitle: string?,
+	-- Whether this lobby always takes the big card (Modes.FEATURED).
+	featured: boolean,
 	-- The rung this card was minted at, which is what named it. See Record.
 	size: number,
 	cap: number,
@@ -1164,7 +1324,11 @@ function Matchmaker.readWire(wire: { any }, myUserId: number): { CardView }
 			-- entry only ever held a cold-start default -- so the rung the
 			-- record was minted at is what the card reads.
 			local size = e[8] or cap
-			local rung = if slot.flex then Matchmaker.rungFor(size) else nil
+			-- The 36 is on no rung and wears the 24's name (GRAND_SIZE).
+			local rung = if slot.flex
+				then (Matchmaker.rungFor(size)
+					or (if size == Matchmaker.GRAND_SIZE then Matchmaker.rungFor(24) else nil))
+				else nil
 			out[i] = {
 				slot = i,
 				name = (rung or slot).name,
@@ -1178,6 +1342,8 @@ function Matchmaker.readWire(wire: { any }, myUserId: number): { CardView }
 				modeBlurb = Modes.get(mode).BLURB,
 				historical = Modes.isHistorical(mode),
 				special = Modes.isSpecial(mode),
+				subtitle = Modes.subtitle(mode),
+				featured = Modes.isFeatured(mode),
 				cap = cap,
 				-- The phantoms are counted, never listed -- see `wire`. `mine`
 				-- below is therefore still decided by the REAL roster alone.

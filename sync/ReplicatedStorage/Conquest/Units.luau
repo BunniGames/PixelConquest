@@ -283,9 +283,26 @@ end
 -- Upstream's two cost shapes, named so the table below reads as the table
 -- upstream is: a doubling curve with a cap (city, port, factory) and a
 -- linear-with-cap curve (gunboat, defense post, SAM).
-local function doubling(base: number, growth: number, cap: number)
+-- THE CAP IS WHERE DOUBLING STOPS, NOT WHERE THE PRICE DOES (owner,
+-- 2026-09-29: city and port prices "should keep going up"). Up to `cap` the
+-- curve doubles as it always did; each rung past it costs `step` more than
+-- the last -- 1M, 2M, 3M... A nil or zero step keeps the old flat cap.
+-- Economy.cost reads this same function, so the two ladders cannot drift.
+function Units.ladderPrice(base: number, growth: number, cap: number, step: number?, n: number): number
+	local v = growth ^ n * base
+	if v <= cap or step == nil or step <= 0 or growth <= 1 then
+		return math.min(cap, v)
+	end
+	local m = 0
+	while growth ^ m * base < cap do
+		m += 1
+	end
+	return cap + (n - m) * step
+end
+
+local function doubling(base: number, growth: number, cap: number, step: number?)
 	return function(n: number, _sim: any): number
-		return math.min(cap, growth ^ n * base)
+		return Units.ladderPrice(base, growth, cap, step, n)
 	end
 end
 
@@ -309,7 +326,7 @@ Units.INFO = {} :: { [number]: Info }
 
 -- Config.ts:554-564. Pool is City alone.
 Units.INFO[Units.CITY] = {
-	costFn = doubling(Config.CITY_COST_BASE, Config.CITY_COST_GROWTH, Config.CITY_COST_CAP),
+	costFn = doubling(Config.CITY_COST_BASE, Config.CITY_COST_GROWTH, Config.CITY_COST_CAP, Config.CITY_COST_STEP_AFTER_CAP),
 	costPool = { Units.CITY },
 	buildTicks = Config.CITY_BUILD_TICKS,
 	upgradable = true,
@@ -327,7 +344,7 @@ Units.INFO[Units.CITY] = {
 -- not exist in Conquest yet, which makes its contribution zero and this
 -- line harmless until it does.
 Units.INFO[Units.PORT] = {
-	costFn = doubling(Config.PORT_COST_BASE, Config.PORT_COST_GROWTH, Config.PORT_COST_CAP),
+	costFn = doubling(Config.PORT_COST_BASE, Config.PORT_COST_GROWTH, Config.PORT_COST_CAP, Config.PORT_COST_STEP_AFTER_CAP),
 	costPool = { Units.PORT, Units.FACTORY },
 	buildTicks = Config.PORT_BUILD_TICKS,
 	upgradable = true,
@@ -339,7 +356,7 @@ Units.INFO[Units.PORT] = {
 -- block and Economy.cost, which is the function the build path actually reads.
 Units.INFO[Units.FACTORY] = {
 	costFn = doubling(Config.FACTORY_COST_BASE or 125000,
-		Config.FACTORY_COST_GROWTH or 2, Config.FACTORY_COST_CAP or 1000000),
+		Config.FACTORY_COST_GROWTH or 2, Config.FACTORY_COST_CAP or 1000000, Config.PORT_COST_STEP_AFTER_CAP),
 	costPool = { Units.FACTORY, Units.PORT },
 	buildTicks = FACTORY_BUILD_TICKS,
 	upgradable = true,
@@ -723,7 +740,29 @@ function Units.cost(sim: any, playerId: number, utype: number, extra: number?): 
 			n += (owned < built) and owned or built
 		end
 	end
-	return info.costFn(n, sim)
+	local p = sim.players ~= nil and sim.players[playerId] or nil
+	return Units.hunterPrice(p, utype, info.costFn(n, sim))
+end
+
+-- THE HUNTER ARSENAL'S DISCOUNT (Config.BOT_HUNTER_ARSENAL). The kinds a
+-- hunter AI is priced down on; read here and by Economy.cost, so a building
+-- has one price whichever ladder a bot reads. `p.aiHunter` only exists on a
+-- server Sim's AI, so a person -- and every client -- pays the full price.
+Units.HUNTER_ARSENAL = {
+	[Units.ARTILLERY] = true,
+	[Units.AIRFIELD] = true,
+	[Units.RAILGUN] = true,
+	[Units.MISSILE_SILO] = true,
+	[Units.ATOM_BOMB] = true,
+	[Units.HYDROGEN_BOMB] = true,
+	[Units.SCATTERSHOT] = true,
+}
+
+function Units.hunterPrice(p: any, utype: number, cost: number): number
+	if p ~= nil and p.aiHunter and Config.BOT_HUNTER_ARSENAL and Units.HUNTER_ARSENAL[utype] then
+		return math.floor(cost * (Config.BOT_HUNTER_ARSENAL_COST_MULT or 1))
+	end
+	return cost
 end
 
 -- ================================================================ events ==

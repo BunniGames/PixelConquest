@@ -259,7 +259,7 @@ local NOT_UPGRADABLE = { [3] = true, [18] = true, [19] = true, [21] = true }
 -- one writer and it assigns on every round, not only on a lesson.
 Economy.tutorialPricing = false
 
-local function rung(steps: { number }?, n: number, base: number, growth: number, cap: number): number
+local function rung(steps: { number }?, n: number, base: number, growth: number, cap: number, step: number?): number
 	if steps ~= nil and not Economy.tutorialPricing then
 		local stated = steps[n + 1]
 		if stated ~= nil then
@@ -267,7 +267,8 @@ local function rung(steps: { number }?, n: number, base: number, growth: number,
 		end
 		n -= #steps - 1
 	end
-	return math.min(cap, growth ^ n * base)
+	-- Past `cap` the price keeps climbing by `step` a rung (Units.ladderPrice).
+	return Units.ladderPrice(base, growth, cap, step, n)
 end
 
 function Economy.cost(p: any, kind: number): number
@@ -283,17 +284,19 @@ function Economy.cost(p: any, kind: number): number
 	-- THE TWO GUNS (2026-09-21), each on a linear ladder of its own like the
 	-- post: min(CAP, (n + 1) * STEP). Read here AND by Units.INFO (the AI's
 	-- Units.cost path) off the same Config numbers, so the two cannot drift.
+	-- Units.hunterPrice is the hunter AI's arsenal discount (Config.BOT_HUNTER_
+	-- ARSENAL); it returns the price untouched for everybody else.
 	if kind == Economy.ARTILLERY then
 		local n = math.min(p.artilleryCount or 0, p.artilleryBuilt or 0)
-		return math.min(Config.ARTILLERY_COST_CAP or 750000, (n + 1) * (Config.ARTILLERY_COST_STEP or 150000))
+		return Units.hunterPrice(p, kind, math.min(Config.ARTILLERY_COST_CAP or 750000, (n + 1) * (Config.ARTILLERY_COST_STEP or 150000)))
 	end
 	if kind == Economy.AIRFIELD then
 		local n = math.min(p.airfieldCount or 0, p.airfieldBuilt or 0)
-		return math.min(Config.AIRFIELD_COST_CAP or 1500000, (n + 1) * (Config.AIRFIELD_COST_STEP or 500000))
+		return Units.hunterPrice(p, kind, math.min(Config.AIRFIELD_COST_CAP or 1500000, (n + 1) * (Config.AIRFIELD_COST_STEP or 500000)))
 	end
 	if kind == Economy.RAILGUN then
 		local n = math.min(p.railgunCount or 0, p.railgunBuilt or 0)
-		return math.min(Config.RAILGUN_COST_CAP or 7500000, (n + 1) * (Config.RAILGUN_COST_STEP or 2500000))
+		return Units.hunterPrice(p, kind, math.min(Config.RAILGUN_COST_CAP or 7500000, (n + 1) * (Config.RAILGUN_COST_STEP or 2500000)))
 	end
 	-- THE ANTI-NUKE TOWER, on a linear ladder of its own like the post but an
 	-- order of magnitude up: upstream is min(3M, (n + 1) * 1.5M), 1.5M then 3M
@@ -313,11 +316,11 @@ function Economy.cost(p: any, kind: number): number
 		local n = math.min(p.portCount, p.portBuilt)
 			+ math.min(p.factoryCount or 0, p.factoryBuilt or 0)
 		return rung(Config.PORT_COST_STEPS, n, Config.PORT_COST_BASE,
-			Config.PORT_COST_GROWTH, Config.PORT_COST_CAP)
+			Config.PORT_COST_GROWTH, Config.PORT_COST_CAP, Config.PORT_COST_STEP_AFTER_CAP)
 	end
 	local n = math.min(p[COUNT_FIELD[kind]], p[BUILT_FIELD[kind]])
 	return rung(Config.CITY_COST_STEPS, n, Config.CITY_COST_BASE,
-		Config.CITY_COST_GROWTH, Config.CITY_COST_CAP)
+		Config.CITY_COST_GROWTH, Config.CITY_COST_CAP, Config.CITY_COST_STEP_AFTER_CAP)
 end
 
 -- ============================================================== structures ==
@@ -1222,10 +1225,68 @@ Economy.FREE_FIELD = {
 	[Economy.DEFENSE_POST] = "freePosts",
 	[Economy.CITY] = "freeCities",
 	[Economy.SAM_LAUNCHER] = "freeSams",
+	-- The Railgun Bundle's gun (2026-09-27). The server places it itself
+	-- (Economy.spotNear, then an ordinary build), so the token lives only
+	-- for the length of that one call.
+	[Economy.RAILGUN] = "freeRailguns",
 }
 function Economy.freeBuild(p: any, kind: number): boolean
 	local field = Economy.FREE_FIELD[kind]
 	return field ~= nil and (p[field] or 0) > 0
+end
+
+-- THE NEAREST TILE TO AN EMPIRE'S HOMELAND WHERE `kind` COULD BE PLACED NEW
+-- (2026-09-27, for the Railgun Bundle). The centre is the spawn tile while the
+-- empire still owns it, else the centroid of its land. Square rings outward
+-- in `step`-tile strides to `maxR`; the first tile canBuild calls a "build"
+-- (never an upgrade) wins. Asks canBuild as-is, so the caller supplies the
+-- means -- gold or a free token -- and every spacing and terrain rule holds.
+function Economy.spotNear(sim: any, playerId: number, kind: number, maxR: number, step: number): number?
+	local p = sim.players[playerId]
+	if not p then
+		return nil
+	end
+	local owner = sim.map.owner
+	local centre = p.spawnTile
+	if centre == nil or buffer.readu8(owner, centre) ~= playerId then
+		local sx, sy, n = 0, 0, 0
+		for i = 0, buffer.len(owner) - 1 do
+			if buffer.readu8(owner, i) == playerId then
+				sx += TileMap.x(i)
+				sy += TileMap.y(i)
+				n += 1
+			end
+		end
+		if n == 0 then
+			return nil
+		end
+		centre = TileMap.index(math.floor(sx / n + 0.5), math.floor(sy / n + 0.5))
+	end
+	local cx, cy = TileMap.x(centre), TileMap.y(centre)
+	local function try(x: number, y: number): number?
+		if not TileMap.inBounds(x, y) then
+			return nil
+		end
+		local t = TileMap.index(x, y)
+		local ok, why = Economy.canBuild(sim, playerId, t, kind)
+		return if ok and why == "build" then t else nil
+	end
+	for r = 0, maxR, step do
+		if r == 0 then
+			local t = try(cx, cy)
+			if t then
+				return t
+			end
+		else
+			for d = -r, r, step do
+				local t = try(cx + d, cy - r) or try(cx + d, cy + r) or try(cx - r, cy + d) or try(cx + r, cy + d)
+				if t then
+					return t
+				end
+			end
+		end
+	end
+	return nil
 end
 
 function Economy.canBuild(sim: any, playerId: number, tile: number, kind: number): (boolean, string?, Structure?, number?)
@@ -1975,19 +2036,19 @@ local function stepTradingBoats(sim: any)
 				local pirate = e.wPirate and sim.players[e.wPirate]
 				if pirate then
 					if pirate.alive then
-						pirate.gold += gold
+						pirate.gold += gold * (pirate.boostGold or 1)
 					end
 					sim.tradeGold += gold
 				else
 					local owner = sim.players[src.ownerId]
 					if owner and owner.alive then
-						owner.gold += gold
-						notePayout(sim, owner, src.tile, gold)
+						owner.gold += gold * (owner.boostGold or 1)
+						notePayout(sim, owner, src.tile, gold * (owner.boostGold or 1))
 					end
 					local other = sim.players[dst.ownerId]
 					if other and other.alive then
-						other.gold += gold
-						notePayout(sim, other, dst.tile, gold)
+						other.gold += gold * (other.boostGold or 1)
+						notePayout(sim, other, dst.tile, gold * (other.boostGold or 1))
 					end
 					sim.tradeGold += gold * 2
 				end
@@ -2236,18 +2297,18 @@ local function stepTrains(sim: any)
 						* (Config.GOLD_MULTIPLIER or 1)
 					t.stops = (t.stops or 0) + 1
 					if to.ownerId ~= train.ownerId and stationOwner and stationOwner.alive then
-						stationOwner.gold += bonus
+						stationOwner.gold += bonus * (stationOwner.boostGold or 1)
 						sim.trainStopGold += bonus
 						-- The "+gold" pop the trading boats draw on their port, drawn on
 						-- the station the train just paid at: rail is the other income
 						-- with no click behind it, and until 2026-09-18 it was the one
 						-- that moved the treasury with nothing on the map to show why.
-						notePayout(sim, stationOwner, to.tile, bonus)
+						notePayout(sim, stationOwner, to.tile, bonus * (stationOwner.boostGold or 1))
 					end
 					if trainOwner and trainOwner.alive then
-						trainOwner.gold += bonus
+						trainOwner.gold += bonus * (trainOwner.boostGold or 1)
 						sim.trainStopGold += bonus
-						notePayout(sim, trainOwner, to.tile, bonus)
+						notePayout(sim, trainOwner, to.tile, bonus * (trainOwner.boostGold or 1))
 					end
 				end
 

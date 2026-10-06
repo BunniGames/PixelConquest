@@ -204,6 +204,37 @@ local MIRV_TRAIL_N, MIRV_TRAIL_STEP = 6, 0.05
 local MIRV_SPEED = 48
 local MIRV_LAG = 0.06 -- each later warhead a touch slower, so they land in a ripple
 
+-- THEIR ARMY TAKES THE HIT TOO (owner, 2026-09-27: "show that the things not
+-- only damage buildings, but also do damage to an oponents army size", then
+-- "i want the army size to decrease in the same way it would look like in an
+-- actual match"). Every weapon here kills troops as well as buildings
+-- (Config's *_TROOP_* / *_KILL_* numbers), so their ground wears the label a
+-- match puts on it -- NationLabels' recipe, to the number: the name in
+-- GothamBold, the sword and the army figure under it, the nation's ink with
+-- its light halo -- and on each hit that figure walks down to the new one at
+-- NationLabels' COUNT_RATE, the way it does over a map being shelled.
+-- Losses are raw troops (the label prints a tenth, Numbers.formatTroops),
+-- sized per weapon so the nuke visibly guts an army and a shell dents it.
+local Army = {
+	Name = "Ironhold",
+	Start = 480000,
+	Loss = {
+		ARTILLERY = { 40000, 40000, 70000 }, -- per shell; the third fells the city
+		AIRSTRIKE = { 120000 },
+		RAILGUN = { 90000 },
+		MEGANUKE = { 340000 },
+		SCATTERSHOT = { 140000, 30000 }, -- the bus, then each warhead off it
+	},
+	-- The label's box in tiles, its centre's share of THEIR ground across and
+	-- its top in tiles; NationLabels' row shares, blade and count rate.
+	H = 5.6, CenterF = 0.5, Top = 0.5,
+	NameH = 0.62, TroopsH = 0.34, TroopsY = 0.66, SwordH = 0.9, SwordGap = 0.015,
+	Rate = 9,
+	Font = Font.fromEnum(Enum.Font.GothamBold),
+	-- One local for the lot: this file is at Luau's 200-local ceiling.
+	Numbers = require(script.Parent.Numbers),
+}
+
 -- The recipes' clocks, Missiles' and Structures' numbers.
 local GUN_RECOIL_LIFE, GUN_RECOIL_KICK = 0.28, 0.12
 local GUN_FLASH_LIFE, GUN_FLASH_SIZE = 0.14, 0.55
@@ -434,6 +465,89 @@ local function setHealth(m: any, hp: number?)
 	end
 	track.Visible = true
 	m.hpFill.Size = UDim2.fromScale(math.max(hp, 0.08), 1)
+end
+
+-- ------------------------------------------------------------------ army ---
+-- NationLabels.build and its ink, in this stage's tiles: a holder twice as
+-- wide as it is tall over the middle of their ground, the name across its top,
+-- the sword and the figure under it. Above the effects, so a fireball never
+-- hides the number it is taking down.
+
+function Army.text(holder: Frame, name: string, h: number, y: number, ink: Color3, halo: Color3): TextLabel
+	local t = Instance.new("TextLabel")
+	t.Name = name
+	t.BackgroundTransparency = 1
+	t.FontFace = Army.Font
+	t.TextScaled = true
+	t.TextColor3 = ink
+	t.TextStrokeColor3 = halo
+	t.TextStrokeTransparency = 0.15
+	t.ZIndex = 17
+	t.Size = UDim2.fromScale(1, h)
+	t.Position = UDim2.fromScale(0, y)
+	t.Parent = holder
+	return t
+end
+
+function Army.label(self: any): any
+	local fr, fg, fb = Palette.colorFor(2, 1)
+	local ink = Color3.fromRGB(fr * 0.30, fg * 0.30, fb * 0.34)
+	local halo = Color3.fromRGB(fr + (255 - fr) * 0.55, fg + (255 - fg) * 0.55, fb + (255 - fb) * 0.55)
+	local holder = Instance.new("Frame")
+	holder.Name = "NationLabel"
+	holder.BackgroundTransparency = 1
+	holder.AnchorPoint = Vector2.new(0.5, 0)
+	holder.ZIndex = 16
+	sized(self, holder, Army.H * 2, Army.H)
+	at(self, holder, (BORDER_F + (1 - BORDER_F) * Army.CenterF) * self.W, Army.Top)
+	local name = Army.text(holder, "Name", Army.NameH, 0, ink, halo)
+	name.Text = Army.Name
+	local troops = Army.text(holder, "Troops", Army.TroopsH, Army.TroopsY, ink, halo)
+	local sword = Instance.new("ImageLabel")
+	sword.Name = "Sword"
+	sword.BackgroundTransparency = 1
+	sword.Image = Icons.SWORD
+	sword.ScaleType = Enum.ScaleType.Fit
+	sword.ZIndex = 17
+	sword.AnchorPoint = Vector2.new(1, 0.5)
+	sword.Size = UDim2.fromScale(1, Army.TroopsH * Army.SwordH)
+	local sr = Instance.new("UIAspectRatioConstraint")
+	sr.AspectRatio = 1
+	sr.DominantAxis = Enum.DominantAxis.Height
+	sr.Parent = sword
+	sword.Parent = holder
+	holder.Parent = self.stage
+	return { holder = holder, troops = troops, sword = sword, text = "", swordFrac = -1 }
+end
+
+-- The figure as the map prints it, and the blade parked against its first
+-- digit (NationLabels.step: TextBounds has no answer for text set this frame,
+-- so the blade follows a frame later, measured as a share of the row).
+function Army.paint(self: any)
+	local a = self.army
+	local t = Army.Numbers.formatTroops(a.shown)
+	if t ~= a.text then
+		a.text = t
+		a.troops.Text = t
+	end
+	local tw = a.troops.AbsoluteSize.X
+	local frac = if tw > 1 then math.clamp(a.troops.TextBounds.X / tw, 0, 1) else 0.3
+	if math.abs(frac - a.swordFrac) > 0.002 then
+		a.swordFrac = frac
+		a.sword.Position = UDim2.fromScale(0.5 - frac / 2 - Army.SwordGap, Army.TroopsY + Army.TroopsH / 2)
+	end
+end
+
+-- A hit on their army: the figure's target drops; step walks it there.
+function Army.hurt(self: any, n: number)
+	local a = self.army
+	a.target = math.max(0, a.target - n)
+end
+
+-- The loss this clip deals on hit `i` (the last entry repeats).
+function Army.lossOf(self: any, i: number): number
+	local l = Army.Loss[self.key]
+	return l[math.min(i, #l)]
 end
 
 -- ------------------------------------------------------------------- fx ----
@@ -751,6 +865,8 @@ function PassClips.new(parent: Instance, key: string, aspect: number?): any?
 	-- off your edge, so there is nothing for it to leave from and your side
 	-- of the border stands empty.
 	self.city = chip(self, Icons.HOUSE, 0.35, c3(Palette.colorFor(2, 1)), self.rightX, ROW_Y)
+	self.army = Army.label(self)
+	self.army.shown, self.army.target = Army.Start, Army.Start
 	local mineInk = c3(Palette.colorFor(1, 1))
 	self.tint = mineInk
 	if key == "ARTILLERY" then
@@ -896,6 +1012,7 @@ end
 -- The shell lands (Missiles' "si"): a burst weighted by what it hit, and the
 -- city's bar drops -- or, on the third, the city falls.
 function PassClips.hit(self: any, n: number)
+	Army.hurt(self, Army.lossOf(self, n))
 	if n < 3 then
 		shellBurst(self, self.rightX, ROW_Y, 1.35)
 		setHealth(self.city, n == 1 and 0.66 or 0.33)
@@ -1115,6 +1232,7 @@ local function railHit(self: any)
 	sized(self, wave, 0, 0)
 	self.fx[#self.fx + 1] = { kind = "wave", frame = wave, stroke = stroke, t = 0, life = BOMB_WAVE_LIFE, outer = RAIL_WAVE }
 	raze(self)
+	Army.hurt(self, Army.lossOf(self, 1))
 end
 
 -- Where the head is and which way it points: arcAt / arcHeading, above new.
@@ -1176,6 +1294,7 @@ local function detonate(self: any)
 	blast(self, self.rightX, ROW_Y, self.inner, self.outer, 14, 11, FLASH_LIFE)
 	raze(self)
 	self.kick = NUKE_KICK
+	Army.hurt(self, Army.lossOf(self, 1))
 end
 
 -- A MIRV warhead lands: its own small crater and flash on its ring, and a
@@ -1186,6 +1305,7 @@ local function mirvLand(self: any, i: number)
 	self.mirvs[i] = false
 	blast(self, ms.x1, ms.y1, MIRV_INNER, MIRV_OUTER, 5, 20 + i, FLASH_LIFE * 0.6)
 	self.kick = math.max(self.kick, NUKE_KICK * 0.45)
+	Army.hurt(self, Army.lossOf(self, 2))
 end
 
 -- --------------------------------------------------------------- the bomber --
@@ -1270,6 +1390,7 @@ end
 function PassClips.bomb(self: any)
 	bombBurst(self, self.rightX, ROW_Y)
 	raze(self)
+	Army.hurt(self, Army.lossOf(self, 1))
 end
 
 -- ------------------------------------------------------------------- loop --
@@ -1335,6 +1456,9 @@ function PassClips.reset(self: any, instant: boolean?)
 	self.t = 0
 	self.collapse = nil
 	self.kick = 0
+	local army = self.army
+	army.shown, army.target = Army.Start, Army.Start
+	Army.paint(self)
 	self.stage.Position = UDim2.fromScale(0.5, 0.5)
 	local city = self.city
 	city.scale.Scale = 1
@@ -1543,6 +1667,13 @@ function PassClips.step(self: any, dt: number)
 	end
 
 	stepFx(self, dt)
+
+	-- Their army figure walks down to its new count, as the map's does.
+	local army = self.army
+	if army.shown ~= army.target then
+		army.shown = Army.Numbers.approach(army.shown, army.target, dt, Army.Rate)
+	end
+	Army.paint(self)
 
 	-- THE STAGE'S JOLT when a building goes: the camera kick the round gives
 	-- a razing, in miniature, decaying fast enough to read as an impact.

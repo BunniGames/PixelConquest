@@ -38,6 +38,19 @@ function Camera2D.new(): Camera2D
 		-- overscroll each way is exactly the thing that is covering the map.
 		padTop = 0,
 		padBottom = 0,
+		-- AND THE SIDES (owner, 2026-09-29: "on mobile, the edges are always
+		-- buggy/clipped ... they have a hard time clicking on the edge
+		-- territories"). A phone held sideways has a camera notch and rounded
+		-- corners on its short edges, and with no side overscroll the map's
+		-- east and west coasts were welded under them. These are the device's
+		-- safe-area insets plus a thumb's width on touch, from ConquestClient.
+		padLeft = 0,
+		padRight = 0,
+		-- EXTRA PULL PAST THE REST REGION, per axis, in screen px -- how much
+		-- desk a pan may show beyond the bands above. Not part of `fit`, which
+		-- still frames the map in the clear rect. See setReach.
+		reachX = 0,
+		reachY = 0,
 		-- TRUE WHILE FINGERS ARE ON THE GLASS. The rest clamp below is a vice
 		-- that closes to nothing at the zoom where the map exactly fills an axis,
 		-- so a live gesture is given a viewport of slack and `settle` walks the
@@ -47,6 +60,8 @@ function Camera2D.new(): Camera2D
 		-- When a TIMED hold expires (os.clock). 0 means the hold is explicit --
 		-- fingers on the glass -- and ends when they lift, not on a clock.
 		softUntil = 0,
+		-- A glide in flight (glideTo), or nil.
+		glide = nil :: { x0: number, y0: number, x1: number, y1: number, t0: number, dur: number }?,
 
 		-- The rect `apply` last drew, in viewport pixels. See screenToTile.
 		drawX = 0,
@@ -64,15 +79,31 @@ end
 -- The heights of the HUD's top and bottom bands, in viewport px. Written on
 -- every viewport change from the HUD's own constants, so nothing here carries
 -- a second copy of where the command bar is.
-function Camera2D.setInsets(self: Camera2D, top: number, bottom: number)
+function Camera2D.setInsets(self: Camera2D, top: number, bottom: number, left: number?, right: number?)
 	self.padTop = top
 	self.padBottom = bottom
+	self.padLeft = left or 0
+	self.padRight = right or 0
+end
+
+-- THE DESK IS ALLOWED ON SCREEN (owner, 2026-09-29: "when i move towards the
+-- edges, it still clips. it has something with forcing to show the wooden
+-- background"). The rest clamp stopped a drag the moment a sliver of desk
+-- would show, so a territory on the map's border could come no further in
+-- than the notch -- still under the standings or the rail, and on a phone
+-- those cover a large share of each edge. With reach, a pan may pull any edge
+-- that much further into the screen, desk showing behind it, so every border
+-- tile can be brought out into open ground and tapped.
+function Camera2D.setReach(self: Camera2D, x: number, y: number)
+	self.reachX = x
+	self.reachY = y
 end
 
 function Camera2D.centerOnTile(self: Camera2D, tile: number)
+	self.glide = nil
 	local tx = tile % W
 	local ty = (tile - tile % W) / W
-	self.x = self.viewW / 2 - tx * self.zoom
+	self.x = (self.padLeft + self.viewW - self.padRight) / 2 - tx * self.zoom
 	-- The middle of what you can SEE, not the middle of the window: the command
 	-- bar owns the bottom fifth, so a tile parked at viewH / 2 sits low on the
 	-- map that is actually showing.
@@ -87,13 +118,14 @@ end
 -- the map is centred in what is left. That is a slightly smaller country than
 -- the window alone would allow, and every tile of it can be seen and clicked.
 function Camera2D.fit(self: Camera2D)
+	local clearW = math.max(self.viewW - self.padLeft - self.padRight, 1)
 	local clearH = math.max(self.viewH - self.padTop - self.padBottom, 1)
 	self.zoom = math.clamp(
-		math.min(self.viewW / W, clearH / H),
+		math.min(clearW / W, clearH / H),
 		Config.MIN_ZOOM,
 		Config.MAX_ZOOM
 	)
-	self.x = (self.viewW - W * self.zoom) / 2
+	self.x = self.padLeft + (clearW - W * self.zoom) / 2
 	self.y = self.padTop + (clearH - H * self.zoom) / 2
 	-- This IS the rest position, so nothing is owed a walk home.
 	self.settling = false
@@ -156,11 +188,9 @@ local function clampAxis(pos: number, view: number, map: number, padA: number, p
 end
 
 function Camera2D.clamp(self: Camera2D)
-	-- No horizontal slack: nothing on this HUD spans a SIDE of the screen the
-	-- way the command bar spans its foot.
-	local sx = self.soft and self.viewW or 0
-	local sy = self.soft and self.viewH or 0
-	self.x = clampAxis(self.x, self.viewW, W * self.zoom, 0, 0, sx)
+	local sx = self.soft and math.max(self.viewW, self.reachX) or self.reachX
+	local sy = self.soft and math.max(self.viewH, self.reachY) or self.reachY
+	self.x = clampAxis(self.x, self.viewW, W * self.zoom, self.padLeft, self.padRight, sx)
 	self.y = clampAxis(self.y, self.viewH, H * self.zoom, self.padTop, self.padBottom, sy)
 end
 
@@ -210,6 +240,22 @@ local SETTLE_TAU = 0.055
 local SETTLE_SNAP = 0.5
 
 function Camera2D.settle(self: Camera2D, dt: number)
+	-- A GLIDE (glideTo) rides the same per-frame call: it sets `settling` so the
+	-- frame loop applies every frame of it, and hands back to the ordinary
+	-- settle once it lands. Fingers on the glass cancel it.
+	local g = self.glide
+	if g and not self.soft then
+		local t = math.clamp((os.clock() - g.t0) / g.dur, 0, 1)
+		local e = 1 - (1 - t) ^ 3 -- ease out
+		self.x = g.x0 + (g.x1 - g.x0) * e
+		self.y = g.y0 + (g.y1 - g.y0) * e
+		self.settling = true
+		if t >= 1 then
+			self.glide = nil
+		end
+		return
+	end
+	self.glide = nil
 	if self.soft then
 		-- A timed hold ends itself here, which is why this runs before the
 		-- `settling` test: the wheel and the triggers have nothing else to
@@ -223,10 +269,12 @@ function Camera2D.settle(self: Camera2D, dt: number)
 	if not self.settling then
 		return
 	end
-	local lox, hix = restBounds(self.viewW, W * self.zoom, 0, 0)
+	local lox, hix = restBounds(self.viewW, W * self.zoom, self.padLeft, self.padRight)
 	local loy, hiy = restBounds(self.viewH, H * self.zoom, self.padTop, self.padBottom)
-	local tx = math.clamp(self.x, lox, hix)
-	local ty = math.clamp(self.y, loy, hiy)
+	-- Home is anywhere inside the reach, not the tight rest region: a pinch
+	-- that ends with an edge pulled in must not snap it back under the HUD.
+	local tx = math.clamp(self.x, lox - self.reachX, hix + self.reachX)
+	local ty = math.clamp(self.y, loy - self.reachY, hiy + self.reachY)
 	if self.x == tx and self.y == ty then
 		self.settling = false
 		return
@@ -239,7 +287,25 @@ function Camera2D.settle(self: Camera2D, dt: number)
 	end
 end
 
+-- GLIDES the view so map tile (tx, ty) sits in the middle of what you can see
+-- (owner, 2026-10-02: a target button "that refocuses your camera back to your
+-- land so you dont get lost"). Same target centerOnTile picks, clamped the
+-- same way, but eased there over `seconds` instead of jumped -- a jump across
+-- the whole map reads as a cut, and you lose track of where you came from.
+-- Zoom is left alone. Any pan or zoom on the way cancels it.
+function Camera2D.glideTo(self: Camera2D, tx: number, ty: number, seconds: number?)
+	local x0, y0 = self.x, self.y
+	self.x = (self.padLeft + self.viewW - self.padRight) / 2 - tx * self.zoom
+	self.y = (self.padTop + self.viewH - self.padBottom) / 2 - ty * self.zoom
+	Camera2D.clamp(self)
+	local x1, y1 = self.x, self.y
+	self.x, self.y = x0, y0
+	self.glide = { x0 = x0, y0 = y0, x1 = x1, y1 = y1, t0 = os.clock(), dur = seconds or 0.45 }
+	self.settling = true
+end
+
 function Camera2D.pan(self: Camera2D, dx: number, dy: number)
+	self.glide = nil
 	self.x += dx
 	self.y += dy
 	Camera2D.clamp(self)
@@ -247,6 +313,7 @@ end
 
 -- Zooms by `factor` keeping the map point under (sx, sy) pinned.
 function Camera2D.zoomAt(self: Camera2D, factor: number, sx: number, sy: number)
+	self.glide = nil
 	local oldZoom = self.zoom
 	local newZoom = math.clamp(oldZoom * factor, Config.MIN_ZOOM, Config.MAX_ZOOM)
 	if newZoom == oldZoom then
@@ -269,13 +336,24 @@ end
 -- starting at exactly self.x. At fit zoom a tile is barely one pixel wide, so
 -- a two-pixel disagreement is two tiles: the cursor sits on one tile and the
 -- click lands on another. The fallbacks cover a call before the first apply.
-function Camera2D.screenToTile(self: Camera2D, sx: number, sy: number): number?
+--
+-- `slop` (screen px, optional) forgives a press that lands just OFF the map by
+-- snapping it onto the nearest edge tile. A fingertip is ~40px across and at
+-- fit zoom an edge tile is one; a tap aimed at a coastal territory on the
+-- map's border landed on the desk a few px out and did nothing at all. Only
+-- the click path passes it -- hover stays exact.
+function Camera2D.screenToTile(self: Camera2D, sx: number, sy: number, slop: number?): number?
 	local ox = self.drawX or self.x
 	local oy = self.drawY or self.y
 	local dw = self.drawW or (W * self.zoom)
 	local dh = self.drawH or (H * self.zoom)
 	if dw <= 0 or dh <= 0 then
 		return nil
+	end
+	local s = slop or 0
+	if s > 0 and sx >= ox - s and sx < ox + dw + s and sy >= oy - s and sy < oy + dh + s then
+		sx = math.clamp(sx, ox, ox + dw - 0.001)
+		sy = math.clamp(sy, oy, oy + dh - 0.001)
 	end
 	local mapX = math.floor((sx - ox) / dw * W)
 	local mapY = math.floor((sy - oy) / dh * H)

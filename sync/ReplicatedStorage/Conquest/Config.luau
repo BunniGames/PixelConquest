@@ -314,12 +314,38 @@ Config.BOT_MAX_TROOPS_SCALE = 1.0
 --
 -- This list is also the WHITELIST -- ConquestServer snaps an incoming ratio
 -- to the nearest entry, so a crafted intent cannot ask for 100%.
-Config.ATTACK_PRESETS = { 0.25, 0.50, 0.75 }
+--
+-- ONE SIZE NOW (owner, 2026-09-27: "remove the 25% 50% and 75% attack size,
+-- and instead just always make the player send 33% of their military per
+-- tap"). A one-entry list means every attack snaps to it, and the HUD draws no
+-- buttons for it.
+Config.ATTACK_PRESETS = { 0.33 }
 
--- Half your army is the move you make most often, so it is the one nobody
--- should have to choose. It is also what an untouched HUD commits, which is
--- why it sits in the middle rather than at the cautious end.
-Config.DEFAULT_ATTACK_RATIO = 0.50
+-- What every tap commits. Keep equal to the one preset above.
+Config.DEFAULT_ATTACK_RATIO = 0.33
+
+-- RANKED KEEPS THE CHOICE (owner, 2026-10-05: "in ranked mode, can you bring
+-- back 25%, 50%, and 75% selection for how much troops i wanna attack with").
+-- Casual rounds stay on the one fixed size above; a ranked round draws the
+-- three buttons again and its server whitelists these three instead. Ask
+-- through the two functions below, never the tables, so the server's snap and
+-- the client's buttons read the same list for the same mode.
+Config.RANKED_ATTACK_PRESETS = { 0.25, 0.50, 0.75 }
+Config.RANKED_DEFAULT_ATTACK_RATIO = 0.50
+
+function Config.attackPresets(modeId: string?): { number }
+	if modeId == "ranked" then
+		return Config.RANKED_ATTACK_PRESETS
+	end
+	return Config.ATTACK_PRESETS
+end
+
+function Config.defaultAttackRatio(modeId: string?): number
+	if modeId == "ranked" then
+		return Config.RANKED_DEFAULT_ATTACK_RATIO
+	end
+	return Config.DEFAULT_ATTACK_RATIO
+end
 Config.MIN_ATTACK_RATIO = 0.05
 Config.MAX_ATTACK_RATIO = 1.0
 Config.MIN_ATTACK_TROOPS = 250
@@ -805,6 +831,37 @@ Config.BOT_HUNTER_TRIGGER_SCALE = 0.8
 -- take on an AI up to this multiple of its own army.
 Config.BOT_HUNTER_STRENGTH_MARGIN = 2
 
+-- THE HUNTER ARSENAL (owner, 2026-09-29: aggressive AIs get "more access to
+-- railguns, airstrikes, artillery, nukes, and scatterbombs ... and use it
+-- against other AIs"). Hunters only -- so never a faux seat and never a tribe.
+-- Before this a hunter fielded none of them in a whole round (us, 31 empires,
+-- seed 777: 0 guns, 0 fields, 0 silos) because the treasury went on cities.
+--
+-- AI ON AI, ALL THE WAY DOWN. A hunter's aimpoints are chosen on AI ground,
+-- and at impact its shells, bombers, slugs and scattershot warheads skip a
+-- person's troops and buildings (Sim.hunterSpares). Nukes already never hit a
+-- person (Nukes' nukeable + blastTouchesPerson).
+Config.BOT_HUNTER_ARSENAL = true
+-- A hunter pays this share of the price of the arsenal kinds below -- the
+-- buildings and the warheads both. 0.15: a battery 22.5k, a field 75k, a
+-- silo 150k, a railgun 375k, an atom bomb 112.5k, a scattershot 562.5k.
+Config.BOT_HUNTER_ARSENAL_COST_MULT = 0.15
+-- Per-hunter ceilings, and the city levels each waits for.
+-- (The artillery and airfield ceilings are moot since 2026-09-29: only faux
+-- seats may build either, and a faux seat is never a hunter.)
+Config.BOT_HUNTER_MAX_ARTILLERY = 2
+Config.BOT_HUNTER_MAX_AIRFIELD = 1
+Config.BOT_HUNTER_MAX_RAILGUN = 1
+Config.BOT_HUNTER_MAX_SILO = 1
+Config.BOT_HUNTER_RAILGUN_CITIES = 1
+-- Odds a rearmed hunter field / railgun fires on a think beat (4-8 s).
+Config.BOT_HUNTER_AIRSTRIKE_CHANCE = 0.5
+Config.BOT_HUNTER_RAILGUN_CHANCE = 0.5
+-- A hunter's silo: at least this many ticks between its launches, and the
+-- odds it picks a scattershot over a plain bomb when it can afford one.
+Config.BOT_HUNTER_NUKE_INTERVAL = 450
+Config.BOT_HUNTER_SCATTERSHOT_CHANCE = 0.5
+
 -- selectEnemy(): below the trigger ratio an AI still commits one think in
 -- ten, so a stalemated border is never perfectly quiet.
 Config.BOT_TRIGGER_BYPASS_CHANCE = 0.10
@@ -929,16 +986,20 @@ Config.GOLD_PER_TICK_BOT = 50
 -- human in reach strictly better than any other war.
 Config.CONQUER_GOLD_HUMAN_SHARE = 0.5
 
--- Cities and ports share ONE cost ladder: min(CAP, GROWTH^built * BASE), so
--- 125k / 250k / 500k / 1M / 1M... The choice between them is never about
+-- Cities and ports share ONE cost ladder: GROWTH^built * BASE up to CAP, then
+-- CAP plus STEP_AFTER_CAP a rung, so 125k / 250k / 500k / 1M / 1.25M / 1.5M...
+-- (owner, 2026-09-29: the price "should keep going up", it used to sit at 1M
+-- forever -- Units.ladderPrice). The choice between them is never about
 -- price, it is about whether you would rather have 250,000 troops or a trade
 -- route. PORTS GIVE NO TROOPS.
 Config.CITY_COST_BASE = 125000
 Config.CITY_COST_GROWTH = 2
 Config.CITY_COST_CAP = 1000000
+Config.CITY_COST_STEP_AFTER_CAP = 250000
 Config.PORT_COST_BASE = 125000
 Config.PORT_COST_GROWTH = 2
 Config.PORT_COST_CAP = 1000000
+Config.PORT_COST_STEP_AFTER_CAP = 250000
 
 -- ...AND THE FIRST FEW RUNGS ARE STATED BY HAND (owner, 2026-09-08: "cities
 -- start at 25k then 2nd at 75k. and third one is 125k as normal / ports start
@@ -1016,6 +1077,26 @@ Config.TUTORIAL_GOLD_BONUS = 1000000
 -- arrives twice as fast and costs exactly what it always cost.
 Config.TUTORIAL_ATTACK_SPEED = 2
 
+-- TIMED BOOSTS (2026-10-03, owner: "I call these boosts. you buy a dev product,
+-- it gives you 15 minutes of this boost"). Sold from the store's second square
+-- row. The clock is WALL TIME from the purchase, kept on the profile as an
+-- os.time() deadline (profile.boostUntil[key]), so it runs on across rounds,
+-- servers and the lobby alike, and a second purchase adds another 15 minutes on
+-- top of whatever is left. Each key names the Sim field it switches on and the
+-- multiplier it sets there; ConquestServer.timedBoosts writes the field every
+-- tick, and the player attribute BOOST_ATTR..key carries the deadline to the
+-- store card's countdown. TUTORIAL_FORCES is the owner's existing "Special
+-- Forces (2x Attack Speed)!" product, re-sold as a timed boost.
+Config.BOOST_SECONDS = 15 * 60
+Config.BOOST_ATTR = "ConquestBoost_"
+Config.TIMED_BOOSTS = {
+	-- Multiplies Sim.tilesPerTick, on top of the mode's own attackSpeed.
+	-- +50% (owner, 2026-10-04: cut from 2x; the card and blurb say +50% too).
+	TUTORIAL_FORCES = { field = "boostAttack", mult = 1.5 },
+	-- Multiplies passive gold, trade-boat pay and train pay (not loot).
+	BOOST_GOLD = { field = "boostGold", mult = 2 },
+}
+
 -- --------------------------------------------------- Starter Pack #1 ----
 --
 -- ONE PRODUCT, THREE GRANTS (owner, 2026-09-17). Sold off the store's own
@@ -1057,6 +1138,31 @@ Config.STARTER_PACK2_GOLD_BONUS = 0
 Config.STARTER_PACK2_POSTS = 3
 Config.STARTER_PACK2_CITIES = 1
 Config.STARTER_PACK2_SAMS = 1
+
+-- --------------------------------------------------- Railgun Bundle -----
+--
+-- (owner, 2026-09-27: "+3 Nukes, +1 Railgun (automatically placed on the map)
+-- near the center of a player's homeland and +1 Defence"). A developer
+-- product, repeatable, granted through the Starter Packs' token path.
+-- Nukes are free atom bombs (the free warhead's field); the defence is a
+-- free post the player places, as the packs' are; the railgun is PLACED BY
+-- THE SERVER on the free buildable tile nearest the homeland's centre (the
+-- empire's spawn tile while it still holds it), searched out to
+-- RAILGUN_BUNDLE_SEARCH tiles in steps of RAILGUN_BUNDLE_STEP. With no room
+-- the token stays banked and the held-boost sweep retries.
+Config.RAILGUN_BUNDLE_NUKES = 3
+Config.RAILGUN_BUNDLE_POSTS = 1
+Config.RAILGUN_BUNDLE_SEARCH = 160
+Config.RAILGUN_BUNDLE_STEP = 3
+
+-- --------------------------------------------------- the General Pack ---
+-- (owner, 2026-10-02.) "1M army" as the HUD prints it: troops reach the
+-- screen as troops/10, so this is 10,000,000 raw -- the TUTORIAL_ARMY_BONUS
+-- rule.
+Config.GENERAL_PACK_ARMY = 10000000
+-- Free atom bombs in hand, fired without paying the gold (owner, 2026-10-02:
+-- "sell a Nuke along with it").
+Config.GENERAL_PACK_NUKES = 1
 
 -- ------------------------------------------------- the gold top-ups -----
 --
@@ -1165,9 +1271,11 @@ Config.SAM_COOLDOWN = 90 -- ticks; nine seconds at TICK_RATE
 -- own number; the ones after it are unchanged, so the second tower is still 3M.
 -- Moved here from two literals (Economy.cost and Units.INFO) that had to be kept
 -- in agreement by hand; both read these now.
-Config.SAM_COST_FIRST = 1000000
-Config.SAM_COST_STEP = 1500000
-Config.SAM_COST_CAP = 3000000
+-- HALVED at every rung (owner, 2026-09-29: "make anti nuke cost 50% less at
+-- each tier"): 500K for the first, then 1.5M forever (was 1M, then 3M).
+Config.SAM_COST_FIRST = 500000
+Config.SAM_COST_STEP = 750000
+Config.SAM_COST_CAP = 1500000
 
 -- ------------------------------------------------- building hit points ----
 -- (2026-09-21) Until the artillery and the airfield nothing chipped at a
@@ -1636,6 +1744,10 @@ Config.BOT_BUILDS_DEFENCES = true
 --   BOT_AIRSTRIKE_CHANCE  the odds a REARMED AI airfield flies on any one think
 --       beat (4-8 s). At 0.1 a field sorties about every two minutes; a person's
 --       can go every AIRSTRIKE_COOLDOWN (30 s). Sim's botAirstrike.
+-- ONLY THE FAUX SEATS BUILD EITHER (owner, 2026-09-29: "make it so that only
+-- AIs posing as real players can spawn them"). Every other AI -- hunters
+-- included -- is refused both kinds in Sim's shouldBuildStructure, so the two
+-- shares below are now the fraction of FAUX empires that field each.
 Config.BOT_ARTILLERY_SHARE = 0.3
 Config.BOT_MAX_ARTILLERY = 2
 Config.BOT_ARTILLERY_COOLDOWN_MULT = 3

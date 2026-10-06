@@ -30,6 +30,7 @@ local HELP = {
 	"  /endgame tutorial  finish the lesson track",
 	"  /endgame fail      fail it instead",
 	"  /endgame round     end the match itself",
+	"/win -- end the round with YOU as the winner (tests the 3x MONEY offer)",
 }
 
 -- ================================================================ plumbing ==
@@ -104,6 +105,25 @@ local function dispatch(player: Player?, text: string)
 		return
 	end
 
+	-- /win (2026-09-29): end the round with the caller as its winner, to test
+	-- what a real win shows -- the 3x MONEY offer above all. ConquestServer's
+	-- _G.ConquestWin does the work; see there.
+	if string.match(string.lower(text), "^%s*/win") then
+		local win = _G.ConquestWin
+		if type(win) ~= "function" or player == nil then
+			tell(player, "no round on this server to win.")
+			return
+		end
+		local ok, line = win(player, function(msg: string)
+			tell(player, msg)
+		end)
+		tell(player, line)
+		if ok and RunService:IsStudio() then
+			tell(player, "  (Studio has nowhere to teleport to, so it rotates in place instead)")
+		end
+		return
+	end
+
 	local args = string.gsub(text, "^%s*/%a+%s*", "")
 	local first = string.lower(string.match(args, "^%S+") or "")
 
@@ -151,10 +171,24 @@ end)
 	dispatch(player, text)
 end)
 
+-- /win, its own command so TextChatService swallows it like /endgame.
+local winCmd = TextChatService:FindFirstChild("WinCommand")
+if not winCmd then
+	local c = Instance.new("TextChatCommand")
+	c.Name = "WinCommand"
+	c.PrimaryAlias = "/win"
+	c.Parent = TextChatService
+	winCmd = c
+end
+;(winCmd :: TextChatCommand).Triggered:Connect(function(source, text)
+	local player = source and Players:GetPlayerByUserId(source.UserId)
+	dispatch(player, text)
+end)
+
 local function watch(player: Player)
 	player.Chatted:Connect(function(message)
 		local lower = string.lower(message)
-		if string.match(lower, "^/endgame") or string.match(lower, "^/endround") then
+		if string.match(lower, "^/endgame") or string.match(lower, "^/endround") or string.match(lower, "^/win") then
 			dispatch(player, message)
 		end
 	end)

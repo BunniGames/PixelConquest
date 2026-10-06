@@ -87,6 +87,37 @@ Faces.CROWD = {
 	{ name = "rubymoose_42", display = "rubymoose_42", userId = -54, image = "rbxassetid://129063891784332" },
 	{ name = "notclumsyyeti", display = "notclumsyyeti", userId = -55, image = "rbxassetid://136997781998350" },
 	{ name = "ivykraken205", display = "ivykraken205", userId = -56, image = "rbxassetid://110270177619354" },
+	-- EURASIA'S EVERY AI SEAT IS A "PLAYER" (owner, 2026-09-25): up to 71 faux
+	-- in one round, so the crowd grew by 26. Each name was checked against
+	-- users.roblox.com (POST /v1/usernames/users) and returned NO account on
+	-- 2026-09-25. Their faces are borrowed from Faces.NPC, dealt from the END of
+	-- that list; Eurasia has no plain NPC nations left to share them with.
+	{ name = "mossyfalcon_61", display = "mossyfalcon_61", userId = -57, image = "rbxassetid://138871493822506" },
+	{ name = "tobyparsnip28", display = "tobyparsnip28", userId = -58, image = "rbxassetid://110174640218807" },
+	{ name = "lunarbadger_907", display = "lunarbadger_907", userId = -59, image = "rbxassetid://92377875872339" },
+	{ name = "gremlinsocks44", display = "gremlinsocks44", userId = -60, image = "rbxassetid://90532497048631" },
+	{ name = "pixelwombat_12", display = "pixelwombat_12", userId = -61, image = "rbxassetid://101062344593143" },
+	{ name = "jadeotter_550", display = "jadeotter_550", userId = -62, image = "rbxassetid://121144577699917" },
+	{ name = "snorlaxbread7", display = "snorlaxbread7", userId = -63, image = "rbxassetid://125863681714990" },
+	{ name = "fizzyplatypus3", display = "fizzyplatypus3", userId = -64, image = "rbxassetid://70498364433049" },
+	{ name = "cosmicturnip_81", display = "cosmicturnip_81", userId = -65, image = "rbxassetid://73928647541522" },
+	{ name = "quietlemur_236", display = "quietlemur_236", userId = -66, image = "rbxassetid://100802570718538" },
+	{ name = "ninjapancake_09", display = "ninjapancake_09", userId = -67, image = "rbxassetid://110480883021378" },
+	{ name = "rustyheron_74", display = "rustyheron_74", userId = -68, image = "rbxassetid://71536273677565" },
+	{ name = "velvetgecko_18", display = "velvetgecko_18", userId = -69, image = "rbxassetid://80341639958361" },
+	{ name = "wafflecomet_62", display = "wafflecomet_62", userId = -70, image = "rbxassetid://91639369422360" },
+	{ name = "toastyfern_305", display = "toastyfern_305", userId = -71, image = "rbxassetid://136940927908342" },
+	{ name = "brambleowl_47", display = "brambleowl_47", userId = -72, image = "rbxassetid://119719827122936" },
+	{ name = "sleepyiguana_93", display = "sleepyiguana_93", userId = -73, image = "rbxassetid://138952267923135" },
+	{ name = "crunchymole_15", display = "crunchymole_15", userId = -74, image = "rbxassetid://123100781603864" },
+	{ name = "driftnarwhal_88", display = "driftnarwhal_88", userId = -75, image = "rbxassetid://131901008581856" },
+	{ name = "picklepuffin_21", display = "picklepuffin_21", userId = -76, image = "rbxassetid://115078933916082" },
+	{ name = "mangoferret_604", display = "mangoferret_604", userId = -77, image = "rbxassetid://91607434792025" },
+	{ name = "tinycobra_4412", display = "tinycobra_4412", userId = -78, image = "rbxassetid://79435624355213" },
+	{ name = "frostymarmot_33", display = "frostymarmot_33", userId = -79, image = "rbxassetid://73602161758305" },
+	{ name = "bubblelynx_719", display = "bubblelynx_719", userId = -80, image = "rbxassetid://122827364940002" },
+	{ name = "zestybeaver_56", display = "zestybeaver_56", userId = -81, image = "rbxassetid://93911190807731" },
+	{ name = "hazelmantis_08", display = "hazelmantis_08", userId = -82, image = "rbxassetid://125816991824004" },
 } :: { { name: string, display: string, userId: number, image: string? } }
 
 -- THE NPC NATIONS' FACES (owner, 2026-09-25: "i want npcs to have pfps too.

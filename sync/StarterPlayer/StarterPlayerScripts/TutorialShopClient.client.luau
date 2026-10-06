@@ -92,6 +92,7 @@ local Matchmaker = require(Shared.Matchmaker)
 local Net = require(Shared.Net)
 local Products = require(Shared.Products)
 local Sfx = require(Shared.Sfx)
+local MoneyNote = require(Shared.MoneyNote)
 
 -- A lobby server runs no round, so it runs no lesson. YIELDING here rather than
 -- returning is deliberate and is what ConquestClient does: a Studio lobby FLIPS
@@ -189,6 +190,21 @@ local PACK2_ROWS = {
 	{ icon = Icons.HOUSE, name = "City", amount = "x1" },
 	{ icon = Icons.DOME, name = "Anti-Nuke", amount = "x1" },
 }
+-- THE RAILGUN BUNDLE (owner, 2026-09-27): Config's Railgun Bundle block. The
+-- railgun is placed for the buyer; the nukes and the defence are free ones in
+-- hand.
+local RAILGUN_ROWS = {
+	{ icon = Icons.NUKE, name = "Nukes", amount = "x3" },
+	{ icon = Icons.RAILGUN, name = "Railgun", amount = "x1" },
+	{ icon = Icons.TOWER, name = "Defence", amount = "x1" },
+}
+-- THE GENERAL PACK (owner, 2026-10-02): a million troops as the HUD prints it
+-- (Config.GENERAL_PACK_ARMY) and a free nuke (GENERAL_PACK_NUKES). Two rows, so
+-- `wire` hides tile 3 and the strip's centred layout keeps the pair together.
+local GENERAL_ROWS = {
+	{ icon = Icons.SWORD, name = "Army", amount = "+1M" },
+	{ icon = Icons.NUKE, name = "Nuke", amount = "x1" },
+}
 
 -- WHICH PRODUCT IS IN WHICH SLOT. `path` is walked from Container.
 --
@@ -260,6 +276,50 @@ local SLOTS = {
 		icon = "",
 		rewards = PACK2_ROWS,
 	},
+	-- THE THIRD BUNDLE STRIP (owner, 2026-09-27): a copy of PROPack in
+	-- StarterGui.Store, LayoutOrder 62, so it sorts right after it.
+	{
+		path = { "RailgunPack" },
+		key = "RAILGUN_BUNDLE",
+		kind = "product",
+		label = "RAILGUN BUNDLE",
+		icon = "",
+		rewards = RAILGUN_ROWS,
+	},
+	-- THE GENERAL PACK (owner, 2026-10-02: "below railgun"): a copy of
+	-- RailgunPack in StarterGui.Store, LayoutOrder 63.
+	{
+		path = { "GeneralPack" },
+		key = "GENERAL_PACK",
+		kind = "product",
+		label = "GENERAL PACK",
+		icon = "",
+		rewards = GENERAL_ROWS,
+	},
+	-- TIMED BOOSTS (owner, 2026-10-03): the second square row's first two
+	-- slots, 15 minutes each (Config.TIMED_BOOSTS). Slot3 stays hidden until a
+	-- third boost is named. `timed` gives the card its countdown.
+	{
+		path = { "Gamepasses2", "Slot1" },
+		key = "TUTORIAL_FORCES",
+		kind = "product",
+		-- The product's own name (owner, 2026-10-03).
+		-- Two lines on purpose: one line in the square's name strip shrank it
+		-- to half the size of every other card's name.
+		label = "Special Forces\n(+50% Speed)",
+		icon = Icons.SWORD,
+		timed = true,
+	},
+	{
+		path = { "Gamepasses2", "Slot2" },
+		key = "BOOST_GOLD",
+		kind = "product",
+		-- Matches Special Forces' two-line shape so both names print the same
+		-- size; the site calls the product "Gold Boost [2X]".
+		label = "Gold Boost\n(2x Gold)",
+		icon = Icons.GOLD,
+		timed = true,
+	},
 }
 
 -- EVERY OTHER SLOT IN THE STORE IS HIDDEN. The kit advertises brainrots, luck
@@ -277,7 +337,9 @@ local SLOTS = {
 -- -- a title, a three-tile Rewards row and a buy pill, which is exactly a pack.
 local HIDE = {
 	"Exclusive", "VIP", "ServerLuck", "LuckyBlocks",
-	"Cash", "TextFrame1", "TextFrame3", "TextFrame4", "TextFrame5",
+	"Cash", "TextFrame1", "TextFrame3", "TextFrame4",
+	-- TextFrame5 ("Money") came off 2026-10-03: it is the BOOSTS header now,
+	-- shown with the boost row (see THE BOOST CARDS COUNT DOWN).
 	-- The two that used to read VIP and POWER UPS.
 	"TextFrame", "TextFrame2",
 }
@@ -380,7 +442,7 @@ local HOVER_RATE = 12 -- how fast a hover eases in, per second
 -- the tab is centred in THAT band: (72 + 608) / 2 = 340.
 local TAB_X = 14 / 1280
 local TAB_Y = 340 / 720
-local TAB_SIZE = 88 / 720
+local TAB_SIZE = 104 / 720
 local TAB_RATIO = 1
 -- SUBTLE, DELIBERATELY (owner: "the shop HUD animation is way too much. i want
 -- that one to be more subtle"). The first pass breathed 4.5% and swung 3.5
@@ -388,6 +450,10 @@ local TAB_RATIO = 1
 -- demanding attention. A third of that, at half the rate: it drifts.
 local TAB_BREATHE = 0.016
 local TAB_BREATHE_HZ = 0.55
+-- The alert badge on the tab breathes on the tab's own beat but much further
+-- (owner: "alert can have a bigger growth ratio though to capture more
+-- attention"): +/-12% of its own size on top of the tab's.
+local ALERT_BREATHE = 0.12
 local TAB_SWING = 1.1
 local TAB_SWING_HZ = 0.3
 local TAB_HOVER_GROW = 0.07
@@ -711,14 +777,42 @@ do
 		heroCard.Size = UDim2.new(heroCard.Size.X.Scale, 0, HERO_H, 0)
 		pin(heroCard, { { "Icon", 1 }, { "Icon2", 1 }, { "BuyButtons", 1 }, { "Starbust", 1.93 } })
 	end
-	local squaresRow = container:FindFirstChild("Gamepasses")
-	if squaresRow ~= nil and squaresRow:IsA("GuiObject") then
-		squaresRow.Size = UDim2.new(squaresRow.Size.X.Scale, 0, ROW_H, 0)
-		for _, sq in squaresRow:GetChildren() do
-			if sq:IsA("GuiObject") then
-				pin(sq, { { "Icon", 1 }, { "BuyButtons", 1 } })
+	-- Gamepasses2 is the SECOND square row (owner, 2026-09-27: "add another row
+	-- where i can sell more stuff"), a copy of the first with its cards renamed
+	-- Slot1..Slot3, sized and pinned the same way.
+	for _, rowName in { "Gamepasses", "Gamepasses2" } do
+		local squaresRow = container:FindFirstChild(rowName)
+		if squaresRow ~= nil and squaresRow:IsA("GuiObject") then
+			squaresRow.Size = UDim2.new(squaresRow.Size.X.Scale, 0, ROW_H, 0)
+			for _, sq in squaresRow:GetChildren() do
+				if sq:IsA("GuiObject") then
+					pin(sq, { { "Icon", 1 }, { "BuyButtons", 1 } })
+				end
 			end
 		end
+	end
+end
+
+-- THE SECOND ROW SHOWS ONLY WHAT IT SELLS. A card no SLOTS entry names still
+-- wears the kit's placeholder art and price, so it is hidden -- and a row with
+-- nothing in it goes altogether, leaving the page exactly as it was.
+do
+	local row2 = container:FindFirstChild("Gamepasses2")
+	if row2 ~= nil and row2:IsA("GuiObject") then
+		local sold: { [string]: boolean } = {}
+		for _, slot in SLOTS do
+			if slot.path[1] == "Gamepasses2" and slot.path[2] ~= nil then
+				sold[slot.path[2]] = true
+			end
+		end
+		local any = false
+		for _, card in row2:GetChildren() do
+			if card:IsA("GuiObject") then
+				card.Visible = sold[card.Name] == true
+				any = any or card.Visible
+			end
+		end
+		row2.Visible = any
 	end
 end
 
@@ -810,6 +904,7 @@ type Slot = {
 	icon: string,
 	desc: ({ string } | string)?,
 	rewards: { { icon: string, name: string, amount: string } }?,
+	timed: boolean?,
 }
 
 -- THE PRICE IS ONE BOX (owner, 2026-09-17: "put the robux and the number in 1
@@ -905,6 +1000,14 @@ local function wire(slot: Slot)
 	-- this; only the picture and the two words inside each one change.
 	if slot.rewards ~= nil then
 		local box = card:FindFirstChild("Rewards")
+		-- A pack with fewer than three things (the General Pack's one) hides the
+		-- tiles it does not fill, rather than leaving the kit's art in them.
+		for i = #slot.rewards + 1, 3 do
+			local spare = if box ~= nil then box:FindFirstChild(tostring(i)) else nil
+			if spare ~= nil and spare:IsA("GuiObject") then
+				spare.Visible = false
+			end
+		end
 		for i, r in (if box ~= nil then slot.rewards else {}) do
 			local tile = (box :: Instance):FindFirstChild(tostring(i))
 			if tile ~= nil then
@@ -1004,8 +1107,13 @@ local function wire(slot: Slot)
 				end
 				row.TextColor3 = Color3.new(1, 1, 1)
 				-- Dashed, every line (owner: "start it with a - every time").
-				row.Text = "- " .. text
+				-- "10,000 MONEY" ends in the banknote, not the word (MoneyNote).
+				local rest, isMoney = MoneyNote.strip(text)
+				row.Text = "- " .. rest
 				row.Parent = card
+				if isMoney then
+					MoneyNote.attach(row, "after")
+				end
 			end
 		end
 	else
@@ -1242,6 +1350,132 @@ for _, slot in SLOTS do
 	wire(slot :: Slot)
 end
 
+-- THE BOOST CARDS COUNT DOWN (2026-10-03). A timed boost's square shows a
+-- white "0:00" while it is not running and a green "14:32" while it is
+-- (owner: "when nothing is bought its 0:00"), in the kit's own
+-- `Des` label (which the squares otherwise hide), read off the
+-- ConquestBoost_<KEY> deadline the server sets. Twice a second is plenty for a
+-- clock that shows seconds.
+do
+	local Config = require(Shared.Config)
+	-- THEIR OWN SECTION AT THE BOTTOM (owner, 2026-10-03: "put these two at the
+	-- bottom in their own section called boosts. No need for the extra text").
+	-- The kit's last header (TextFrame5) says just BOOSTS -- no emoji, nothing
+	-- else -- and it and the row sort after every other card on the page.
+	local boostRow = if container ~= nil then container:FindFirstChild("Gamepasses2") else nil
+	local boostHead = if container ~= nil then container:FindFirstChild("TextFrame5") else nil
+	if boostRow ~= nil and boostRow:IsA("GuiObject") then
+		boostRow.LayoutOrder = 91
+		if boostHead ~= nil and boostHead:IsA("GuiObject") then
+			boostHead.LayoutOrder = 90
+			boostHead.Visible = boostRow.Visible
+			local words = boostHead:FindFirstChild("Text")
+			if words ~= nil and words:IsA("TextLabel") then
+				words.Text = "BOOSTS"
+			end
+		end
+	end
+	local timers = {}
+	for _, slot in SLOTS do
+		if (slot :: any).timed then
+			local card: Instance? = container
+			for _, step in slot.path do
+				card = card and card:FindFirstChild(step)
+			end
+			local des = if card ~= nil then card:FindFirstChild("Des") else nil
+			if des ~= nil and des:IsA("TextLabel") and (card :: GuiObject).Visible then
+				-- THE LOOK (owner, 2026-10-03: "make this look better"). The name
+				-- strip is taller so the two-line names read at full size, and the
+				-- clock sits on the bottom edge of the
+				-- sticker, above the buy pill -- it used to float between the name
+				-- and the sticker, touching both. All scale. NO BACKGROUND (owner,
+				-- 2026-10-04: "black background is not it") -- just the kit's own
+				-- stroked text, like every other word on the card.
+				for _, nm in (card :: Instance):GetChildren() do
+					if nm.Name == "Name" and nm:IsA("TextLabel") then
+						nm.Position = UDim2.new(0.5, 0, 0.025, 0)
+						nm.Size = UDim2.fromScale(0.925, 0.2)
+						nm.TextWrapped = true
+						nm.TextScaled = true
+					end
+				end
+				des.AnchorPoint = Vector2.new(0.5, 0.5)
+				des.Position = UDim2.fromScale(0.5, 0.62)
+				des.Size = UDim2.fromScale(0.6, 0.15)
+				des.TextScaled = true
+				des.TextXAlignment = Enum.TextXAlignment.Center
+				des.BackgroundTransparency = 1
+				des.ZIndex = math.max(des.ZIndex, 6)
+				des.Visible = true
+				local pad = Instance.new("UIPadding")
+				pad.PaddingTop = UDim.new(0.1, 0)
+				pad.PaddingBottom = UDim.new(0.1, 0)
+				pad.Parent = des
+				-- THE OWNER'S HOURGLASS beside the clock (2026-10-03), cloned from
+				-- StarterGui.Images.Hourglass. A child of the label, a square as tall
+				-- as the label (scale, never offset), hung just left of the RENDERED
+				-- text -- the text is centred and its width changes (0:00 vs 14:32),
+				-- so the loop below re-places it each pass.
+				local glass = nil
+				local art = game:GetService("StarterGui"):FindFirstChild("Images")
+				art = art and art:FindFirstChild("Hourglass")
+				if art ~= nil and art:IsA("ImageLabel") then
+					local g = Instance.new("ImageLabel")
+					g.Name = "Hourglass"
+					g.Image = art.Image
+					g.ScaleType = Enum.ScaleType.Fit
+					g.BackgroundTransparency = 1
+					g.AnchorPoint = Vector2.new(1, 0.5)
+					g.Size = UDim2.fromScale(1, 1)
+					g.ZIndex = des.ZIndex + 1
+					local ar = Instance.new("UIAspectRatioConstraint")
+					ar.AspectRatio = 1
+					ar.Parent = g
+					g.Parent = des
+					glass = g
+				end
+				table.insert(timers, { label = des, attr = Config.BOOST_ATTR .. slot.key, glass = glass })
+			end
+		end
+	end
+	if #timers > 0 then
+		task.spawn(function()
+			-- NOT `while shop.Parent ~= nil`: this block runs before the store is
+			-- parented to PlayerGui (the end of this file), so that test was false
+			-- on the first pass and the loop never ran -- the cards kept the kit's
+			-- own white description. The store lives as long as this script.
+			while true do
+				local now = workspace:GetServerTimeNow()
+				for _, t in timers do
+					local left = (tonumber(player:GetAttribute(t.attr)) or 0) - now
+					if left > 0 then
+						local s = math.ceil(left)
+						t.label.Text = ("%d:%02d"):format(s // 60, s % 60)
+						t.label.TextColor3 = Color3.fromRGB(111, 217, 138)
+					else
+						t.label.Text = "0:00"
+						t.label.TextColor3 = Color3.new(1, 1, 1)
+					end
+					-- The badge opens a strip of left padding exactly one hourglass
+					-- wide, so hourglass + time sit centred as a pair; padding insets
+					-- the label's CHILDREN too, so the hourglass is placed against
+					-- the padded content box, a small gap left of the rendered text.
+					local w, h = t.label.AbsoluteSize.X, t.label.AbsoluteSize.Y
+					local pad = t.label:FindFirstChildOfClass("UIPadding")
+					if t.glass ~= nil and pad ~= nil and w > 0 then
+						local glassFrac = h * 0.8 / w
+						pad.PaddingLeft = UDim.new(glassFrac, 0)
+						local inner = w * (1 - glassFrac)
+						local half = math.min(t.label.TextBounds.X, inner) / 2
+						t.glass.Position = UDim2.fromScale(0.5 - (half + h * 0.08) / inner, 0.5)
+					end
+				end
+				task.wait(0.5)
+			end
+		end)
+	end
+end
+
 if #live == 0 then
 	warn("[TutorialShop] no product is configured; the store stays down.")
 	shop:Destroy()
@@ -1417,7 +1651,33 @@ if tabImage ~= nil and tabImage ~= "" then
 		word.Parent = tab
 	end
 
-	tabState = { tab = tab, hover = 0, hovered = false, punch = 0, calm = 0 }
+	-- THE ALERT BADGE (owner: "put it near the shop icon to get more people to
+	-- see it"), read off StarterGui.Images.Alert like the tab's own art, pinned
+	-- to the tab's top-right corner. Parented to the tab so it rides the drift,
+	-- hover and press dent with it; its own pulse is driven in the frame loop
+	-- off the tab's breathe, so the two peak and trough together.
+	local badgeScale: UIScale? = nil
+	local alertArt = images and images:FindFirstChild("Alert")
+	if alertArt ~= nil and (alertArt:IsA("ImageLabel") or alertArt:IsA("ImageButton")) then
+		local badge = Instance.new("ImageLabel")
+		badge.Name = "AlertBadge"
+		badge.Image = (alertArt :: any).Image
+		badge.AnchorPoint = Vector2.new(0.5, 0.5)
+		badge.Position = UDim2.fromScale(0.9, 0.1)
+		badge.Size = UDim2.fromScale(0.45, 0.45)
+		badge.BackgroundTransparency = 1
+		badge.ScaleType = Enum.ScaleType.Fit
+		badge.ZIndex = 12
+		local badgeRatio = Instance.new("UIAspectRatioConstraint")
+		badgeRatio.AspectRatio = 1
+		badgeRatio.Parent = badge
+		local scale = Instance.new("UIScale")
+		scale.Parent = badge
+		badge.Parent = tab
+		badgeScale = scale
+	end
+
+	tabState = { tab = tab, hover = 0, hovered = false, punch = 0, calm = 0, badgeScale = badgeScale }
 
 	tab.MouseEnter:Connect(function()
 		if not tabState.hovered then
@@ -1500,7 +1760,13 @@ RunService.RenderStepped:Connect(function(dt)
 		t.calm += ((open and 1 or 0) - t.calm) * math.min(1, dt * 6)
 
 		local idle = 1 - t.calm * (1 - TAB_OPEN_CALM)
-		local breathe = math.sin(clock * TAB_BREATHE_HZ * math.pi * 2) * TAB_BREATHE * idle
+		local wave = math.sin(clock * TAB_BREATHE_HZ * math.pi * 2)
+		local breathe = wave * TAB_BREATHE * idle
+		-- The alert badge on the same wave, so it swells as the tab does, but
+		-- harder: it is the part meant to be noticed.
+		if t.badgeScale ~= nil then
+			t.badgeScale.Scale = 1 + wave * ALERT_BREATHE
+		end
 		local s = TAB_SIZE * (1 + breathe + TAB_HOVER_GROW * t.hover - TAB_PUNCH_DENT * t.punch)
 		t.tab.Size = UDim2.fromScale(s, s)
 		t.tab.Rotation = math.sin(clock * TAB_SWING_HZ * math.pi * 2) * TAB_SWING * idle * (1 - 0.7 * t.hover)

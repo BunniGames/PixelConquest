@@ -563,10 +563,16 @@ local snapshotRaw = false
 -- instead of riding on every summary five times a second.
 
 local rosterById: { [number]: string } = {}
--- The headshot on a standings row is drawn from the Roblox user id, which
--- rides with the roster (sent once) rather than with the five-a-second
--- summary. Bots have none.
-local rosterUserId: { [number]: number } = {}
+-- The rest of a standings row's per-player constants, which ride with the
+-- roster (sent once) rather than with the five-a-second summary. ONE TABLE,
+-- not one local each: this script sits at Luau's 200-local ceiling.
+--   userId  the Roblox user id the headshot is drawn from. Bots have none.
+--   wins    career wins, for the WINS column. Absent for every AI and for
+--           anyone who has not won yet.
+local rosterInfo = {
+	userId = {} :: { [number]: number },
+	wins = {} :: { [number]: number },
+}
 
 local pendingDeltas: { buffer } = {}
 
@@ -609,6 +615,30 @@ local pointerOverMap = false
 -- under the cursor changed without the cursor changing, and the hover card and
 -- the highlight have to catch up or they describe where you used to be.
 local hoverDirty = false
+
+-- THE TARGET BUTTON in Roblox's top bar (2026-10-02, owner: "a target button
+-- that refocuses your camera back to your land so you dont get lost"). Glides
+-- the view to the heart of your empire -- the same point your nation's name is
+-- printed on (Renderer.nationAnchor), which is always on your own ground, never
+-- the sea between two halves of it. Before the round, the spot you picked.
+-- With no land at all, the refusal sound and nothing else. No new locals here:
+-- this chunk is at its register ceiling.
+hud:recenterButton(function()
+	if renderer and hasSpawned and myTiles > 0 then
+		local ax, ay = renderer:nationAnchor(myId)
+		if ax then
+			camera:glideTo(ax, ay)
+			hoverDirty = true
+			return
+		end
+	end
+	if myPick then
+		camera:glideTo(myPick % Config.MAP_W, myPick // Config.MAP_W)
+		hoverDirty = true
+		return
+	end
+	Sfx.play("Deny")
+end)
 
 -- Forward declarations. All three are defined down with the rest of the click
 -- feedback, but the "denied" and "built" message handlers ABOVE them need
@@ -666,18 +696,39 @@ hud:setRatio(attackRatio, 0)
 local TERRAIN_NAME = { [0] = "ocean", "plains", "highland", "mountain", "impassable" }
 
 local function updateViewport()
+	-- THE MAP STILL COVERS THE WHOLE GLASS. `screen` keeps to the device's safe
+	-- area now (HUD.new), so the viewport is pushed back out over the notch and
+	-- the rounded corners by exactly what that took. Its AbsolutePosition moves
+	-- with it, and fromWindow / fromGui already read that, so pointer space is
+	-- still viewport space with no new term.
+	local l, t, r, b = hud:safeInsets()
+	viewport.Position = UDim2.fromOffset(-l, -t)
+	viewport.Size = UDim2.new(1, l + r, 1, t + b)
 	local size = viewport.AbsoluteSize
 	hud:layout(size.X, size.Y)
 	camera:setViewport(size.X, size.Y)
 	-- The camera has to know what the HUD is standing on before it clamps: those
-	-- two bands are pan it is allowed to give back, and `fit` sizes the spawn
-	-- view to the clear strip between them.
-	camera:setInsets(hud:insets(size.X, size.Y))
+	-- bands are pan it is allowed to give back, and `fit` sizes the spawn view to
+	-- the clear rect between them. On touch every edge gets a thumb's width more,
+	-- so a border territory can be pulled in off the bezel to be tapped.
+	local top, bottom, left, right = hud:insets(size.X, size.Y)
+	local thumb = if UserInputService.TouchEnabled then 24 else 0
+	camera:setInsets(top + thumb, bottom + thumb, left + thumb, right + thumb)
+	-- And on touch, a drag may pull any edge a third of the screen further in,
+	-- desk showing, so a border territory clears the standings and the rail
+	-- (Camera2D.setReach). A mouse has edge-scroll and a precise pointer.
+	if UserInputService.TouchEnabled then
+		camera:setReach(size.X * 0.35, size.Y * 0.35)
+	else
+		camera:setReach(0, 0)
+	end
 	camera:clamp()
 	camera:apply(mapImage)
 end
 
 viewport:GetPropertyChangedSignal("AbsoluteSize"):Connect(updateViewport)
+-- A rotation or a safe-area change moves the window before it moves the map.
+hud.window:GetPropertyChangedSignal("AbsoluteSize"):Connect(updateViewport)
 
 -- ============================================================== messages ===
 
@@ -790,6 +841,8 @@ StateRE.OnClientEvent:Connect(function(kind, payload, extra)
 		historical = payload.historical
 		setPick(nil)
 		winnerName = nil
+		hud:setWinners(nil)
+		hud:setVictory(false)
 		-- Last round's receipt, if a Studio session rotated in place before it
 		-- had finished fading.
 		hud:setPayout(nil)
@@ -815,15 +868,18 @@ StateRE.OnClientEvent:Connect(function(kind, payload, extra)
 		snapshotSeen = 0
 		snapshotBuf = nil
 		table.clear(rosterById)
-		table.clear(rosterUserId)
+		table.clear(rosterInfo.userId)
+		table.clear(rosterInfo.wins)
 		-- Cleared before the roster is read, so an empire id that a different
 		-- player drew this round cannot inherit the last one's pattern.
 		Patterns.clearOwners()
 		NationLabels.clearFlags()
 		for _, e in payload.roster or {} do
 			rosterById[e.i] = e.n
-			rosterUserId[e.i] = e.u
+			rosterInfo.userId[e.i] = e.u
+			rosterInfo.wins[e.i] = e.w
 			NationLabels.setFlag(e.i, e.f)
+			NationLabels.setRank(e.i, e.r)
 			-- `e.p` is absent on every empire wearing none, which is most of
 			-- them; setOwner reads a nil as "solid".
 			Patterns.setOwner(e.i, e.p)
@@ -889,7 +945,9 @@ StateRE.OnClientEvent:Connect(function(kind, payload, extra)
 		myFactoryCost = Config.PORT_COST_FIRST
 		buildMode = false
 		buildKind = 1
-		attackRatio = Config.DEFAULT_ATTACK_RATIO
+		-- Per mode: ranked draws 25 / 50 / 75 and opens on 50 (Config.attackPresets).
+		attackRatio = Config.defaultAttackRatio(payload.modeId)
+		hud:setPresets(Config.attackPresets(payload.modeId))
 		hud:setGold(0, myCityCost, 0)
 		hud:setGain(0)
 
@@ -997,8 +1055,10 @@ StateRE.OnClientEvent:Connect(function(kind, payload, extra)
 		-- map for what is typically one player standing on nine of them.
 		for _, e in payload do
 			rosterById[e.i] = e.n
-			rosterUserId[e.i] = e.u
+			rosterInfo.userId[e.i] = e.u
+			rosterInfo.wins[e.i] = e.w
 			NationLabels.setFlag(e.i, e.f)
+			NationLabels.setRank(e.i, e.r)
 			if Patterns.setOwner(e.i, e.p) and renderer then
 				renderer:repaintOwner(e.i)
 			end
@@ -1010,7 +1070,8 @@ StateRE.OnClientEvent:Connect(function(kind, payload, extra)
 		local list = Net.unpackPlayers(payload)
 		for _, e in list do
 			e.name = rosterById[e.id] or "?"
-			e.userId = rosterUserId[e.id]
+			e.userId = rosterInfo.userId[e.id]
+			e.wins = rosterInfo.wins[e.id]
 		end
 		payload = list
 		local teamsChanged = false
@@ -1105,7 +1166,11 @@ StateRE.OnClientEvent:Connect(function(kind, payload, extra)
 				-- the honest place to read it rather than the revive offer (it
 				-- is refused mid-tutorial) or the receipt (survivors get one
 				-- too). setDefeated is a no-op unless the answer changed.
-				hud:setDefeated(entry.alive ~= true)
+				-- ...AND ONCE THE ROUND IS OVER, for survivors too (owner,
+				-- 2026-09-29: "Make the leave game more visible, display it the
+				-- same way it shows after a player loses a game"): the big
+				-- centred LOBBY button, the bar gone.
+				hud:setDefeated(entry.alive ~= true or phase == "ended")
 			end
 		end
 
@@ -1542,16 +1607,20 @@ StateRE.OnClientEvent:Connect(function(kind, payload, extra)
 		-- as often a consolation as a trophy, and that is the point: the card
 		-- is the only thing between "you are dead" and a twelve-minute wait.
 		--
-		-- NOT AT THE END OF THE ROUND (owner, 2026-09-06: "when a player wins,
-		-- dont show the notification ui at the top, instead just display the
-		-- win banner we currently have but bigger"). The survivors are settled
-		-- on the same tick the win goes out, so this card and the WINS strip
-		-- used to land together; now the strip, at twice its size, is the
-		-- whole of the ending. An empire that fell MID-match still gets its
-		-- receipt -- that arrives while the round is running -- and the
-		-- balance is on the lobby page either way.
-		if phase ~= "ended" then
-			hud:setPayout(payload)
+		-- AT THE END OF THE ROUND TOO (owner, 2026-09-29: "if you win and the
+		-- game ends, shouldnt it show too?"). This used to be skipped once the
+		-- phase was "ended" (owner, 2026-09-06: just the big WINS strip), which
+		-- meant a survivor -- the winner above all -- never saw what the round
+		-- paid. It is back, under the strip: the survivors are paid on the win
+		-- tick, AFTER the "win" packet below has cleared any stale card, and
+		-- the X3 MONEY button (Money3xClient) sits under this card.
+		hud:setPayout(payload)
+		-- THE WINNER'S ENDING: confetti, gold, the pop (HUD.setVictory). Keyed
+		-- off this receipt rather than the "win" packet because the receipt is
+		-- the one place the server says, per client, whether YOU won -- and in
+		-- a team round that includes every surviving member of the bloc.
+		if type(payload) == "table" and payload.won and payload.final then
+			hud:setVictory(true)
 		end
 
 	elseif kind == "revive" then
@@ -1570,8 +1639,43 @@ StateRE.OnClientEvent:Connect(function(kind, payload, extra)
 		hud:setRevive(nil)
 		-- In a team round the BLOC took the map, not whichever member happened
 		-- to hold the most of it at the final tick.
-		winnerName = payload.team and (Palette.teamName(payload.team) .. " TEAM") or payload.name
+		-- "Crimson Team" rather than "CRIMSON TEAM" (owner, 2026-10-02: "display
+		-- Name Wins or X Team Wins"); a player's name is printed as they wrote it.
+		local teamWord = payload.team and Palette.teamName(payload.team) or ""
+		winnerName = payload.team
+				and (string.upper(string.sub(teamWord, 1, 1)) .. string.lower(string.sub(teamWord, 2)) .. " Team")
+			or payload.name
+		-- ...and their faces, for the row under the banner: the winner alone,
+		-- or every member of the winning team who HAS a face (players, and the
+		-- faux ones that wear an identity) -- a bloc of AI is named by the
+		-- banner and has nothing to show here. Biggest empire first.
+		local winners = {}
+		local function addWinner(id: number)
+			local e = playersById[id]
+			table.insert(winners, {
+				userId = rosterInfo.userId[id],
+				name = rosterById[id] or (e and e.name) or "?",
+				color = Palette.playerColor3(id, myId),
+				tiles = e and e.tiles or 0,
+			})
+		end
+		if payload.team then
+			for id, t in teamById do
+				if t == payload.team and rosterInfo.userId[id] ~= nil then
+					addWinner(id)
+				end
+			end
+			table.sort(winners, function(a, b)
+				return a.tiles > b.tiles
+			end)
+		elseif payload.id then
+			addWinner(payload.id)
+		end
+		hud:setWinners(winners)
 		phase = "ended"
+		-- The LOBBY button goes big NOW rather than on the next standings
+		-- packet; see the setDefeated call in the summary branch.
+		hud:setDefeated(true)
 	end
 end)
 
@@ -2015,8 +2119,12 @@ local function stepGuide(dt: number)
 
 	local vp, vs = viewport.AbsolutePosition, viewport.AbsoluteSize
 	local lx, ly = px - vp.X, py - vp.Y
-	local m = GUIDE_EDGE
-	if lx >= m and lx <= vs.X - m and ly >= m and ly <= vs.Y - m then
+	-- Kept off the notch and the rounded corners, which the viewport now
+	-- reaches under (see updateViewport): a chevron parked there is cut off.
+	local il, it, ir, ib = hud:safeInsets()
+	local m = GUIDE_EDGE + math.max(il, ir)
+	local my = GUIDE_EDGE + math.max(it, ib)
+	if lx >= m and lx <= vs.X - m and ly >= my and ly <= vs.Y - my then
 		-- On screen, and the ring is doing the job. A chevron as well would be
 		-- pointing at something already in front of them.
 		arrow.Visible = false
@@ -2034,7 +2142,7 @@ local function stepGuide(dt: number)
 	end
 	-- Scale the direction until it hits the nearer of the two edge planes.
 	local sx = (math.abs(dx) > 0.001) and ((cx - m) / math.abs(dx)) or math.huge
-	local sy = (math.abs(dy) > 0.001) and ((cy - m) / math.abs(dy)) or math.huge
+	local sy = (math.abs(dy) > 0.001) and ((cy - my) / math.abs(dy)) or math.huge
 	local sc = math.min(sx, sy)
 	arrow.Position = UDim2.fromOffset(
 		math.floor(cx + dx * sc),
@@ -2583,7 +2691,8 @@ local function sendClick(sx: number, sy: number)
 	if not renderer then
 		return
 	end
-	local tile = camera:screenToTile(sx, sy)
+	-- A fingertip a few px off the map's edge still means the edge tile.
+	local tile = camera:screenToTile(sx, sy, if UserInputService.TouchEnabled then 16 else 0)
 	if not tile then
 		return
 	end
@@ -2819,7 +2928,11 @@ local function sendClick(sx: number, sy: number)
 		-- that expanding into empty land declares nothing -- but key 0 is a key,
 		-- so the rule is now simply the rule: the first time you push into open
 		-- country this round is steel, and every push after it is the charge.
-		if not Sfx.playOnce("Clash", o) then
+		if Sfx.playOnce("Clash", o) then
+			-- The pop this press raises -- now, or on the next armies
+			-- broadcast for a war on an empire -- strikes on the cue's blows.
+			nationLabels:markClash()
+		else
 			Sfx.play("Charge")
 		end
 		if o ~= 0 then
@@ -3553,7 +3666,7 @@ local gp = {
 -- not equal, for the reason HUD.selectPreset gives: the ratio may sit a
 -- float off a preset, and a step that finds no match would go nowhere.
 function gp.stepPreset(dir: number)
-	local presets = Config.ATTACK_PRESETS
+	local presets = hud.presetList
 	if not presets or #presets == 0 then
 		return
 	end
@@ -3724,8 +3837,8 @@ UserInputService.InputBegan:Connect(function(input, processed)
 		return
 	end
 	local preset = PRESET_KEYS[key]
-	if preset and Config.ATTACK_PRESETS and Config.ATTACK_PRESETS[preset] then
-		setAttackRatio(Config.ATTACK_PRESETS[preset])
+	if preset and hud.presetList and hud.presetList[preset] then
+		setAttackRatio(hud.presetList[preset])
 	end
 end)
 
@@ -4151,7 +4264,7 @@ RunService.RenderStepped:Connect(function(dt)
 	elseif phase == "ended" and winnerName then
 		-- AT TWICE THE SIZE (owner, 2026-09-06). The end of the round is the
 		-- one moment this strip is the only thing on screen worth reading.
-		hud:setBanner(winnerName .. " WINS", Color3.fromRGB(255, 226, 140), true)
+		hud:setBanner(winnerName .. " Wins", Color3.fromRGB(255, 226, 140), true)
 	elseif phase == "playing" and not hasSpawned then
 		hud:setBanner("SPECTATING", Color3.fromRGB(170, 180, 200))
 	else

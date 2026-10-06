@@ -589,9 +589,13 @@ end
 
 -- Flood-fills landmasses and keeps only those big enough to hold a game, so a
 -- player cannot spawn on a coastal islet and be walled in (there are no boats).
--- Returns the spawnable tile list and the playable land count.
-function MapGen.analyze(terrain: buffer, minLandmassSize: number): ({ number }, number)
-	local visited = buffer.create(N)
+-- Returns the spawnable tile list, the playable land count, and a u16 per tile
+-- naming the landmass it belongs to (1.., 0 = not passable land, 0xFFFF = past
+-- the 65,534th landmass, i.e. unknown). Sim keeps that last one: it is how an
+-- attack on open land tells one island from another (Sim.frontTouches).
+function MapGen.analyze(terrain: buffer, minLandmassSize: number): ({ number }, number, buffer)
+	local visited = buffer.create(N * 2)
+	local id = 0
 	local candidates = {}
 	local playable = 0
 
@@ -605,11 +609,12 @@ function MapGen.analyze(terrain: buffer, minLandmassSize: number): ({ number }, 
 	end
 
 	for start = 0, N - 1 do
-		if buffer.readu8(visited, start) == 0 then
+		if buffer.readu16(visited, start * 2) == 0 then
 			if passable(start) then
+				id = math.min(id + 1, 0xFFFF)
 				table.clear(stack)
 				table.clear(component)
-				buffer.writeu8(visited, start, 1)
+				buffer.writeu16(visited, start * 2, id)
 				stack[1] = start
 				local top = 1
 
@@ -621,26 +626,26 @@ function MapGen.analyze(terrain: buffer, minLandmassSize: number): ({ number }, 
 
 					if i >= W then
 						local n = i - W
-						if buffer.readu8(visited, n) == 0 and passable(n) then
-							buffer.writeu8(visited, n, 1); top += 1; stack[top] = n
+						if buffer.readu16(visited, n * 2) == 0 and passable(n) then
+							buffer.writeu16(visited, n * 2, id); top += 1; stack[top] = n
 						end
 					end
 					if i < N - W then
 						local n = i + W
-						if buffer.readu8(visited, n) == 0 and passable(n) then
-							buffer.writeu8(visited, n, 1); top += 1; stack[top] = n
+						if buffer.readu16(visited, n * 2) == 0 and passable(n) then
+							buffer.writeu16(visited, n * 2, id); top += 1; stack[top] = n
 						end
 					end
 					if x ~= 0 then
 						local n = i - 1
-						if buffer.readu8(visited, n) == 0 and passable(n) then
-							buffer.writeu8(visited, n, 1); top += 1; stack[top] = n
+						if buffer.readu16(visited, n * 2) == 0 and passable(n) then
+							buffer.writeu16(visited, n * 2, id); top += 1; stack[top] = n
 						end
 					end
 					if x ~= W - 1 then
 						local n = i + 1
-						if buffer.readu8(visited, n) == 0 and passable(n) then
-							buffer.writeu8(visited, n, 1); top += 1; stack[top] = n
+						if buffer.readu16(visited, n * 2) == 0 and passable(n) then
+							buffer.writeu16(visited, n * 2, id); top += 1; stack[top] = n
 						end
 					end
 				end
@@ -659,13 +664,11 @@ function MapGen.analyze(terrain: buffer, minLandmassSize: number): ({ number }, 
 						end
 					end
 				end
-			else
-				buffer.writeu8(visited, start, 1)
 			end
 		end
 	end
 
-	return candidates, playable
+	return candidates, playable, visited
 end
 
 return MapGen

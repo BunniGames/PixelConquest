@@ -78,8 +78,8 @@
 --
 -- THE TAB IS THE SHOP TAB'S TWIN. Same edge, same size, same drift / hover /
 -- press dent (TutorialShopClient, "the shop tab" block), placed under it: the
--- shop tab is centred at reference y 340 and is 88 tall, and its SHOP caption
--- hangs to ~402, so this one's top sits at 408 -- centre 452. Captioned
+-- shop tab is centred at reference y 340 and is 104 tall, and its SHOP caption
+-- hangs to ~413, so this one's top sits at 419 -- centre 464.5 (this tab is 91). Captioned
 -- ALLIANCE the way the shop tab is captioned SHOP -- see the caption block for
 -- why its box is wider than the shop's.
 
@@ -136,8 +136,8 @@ local REF_W, REF_H = 1280, 720
 
 -- ------------------------------------------------------------------- the tab --
 local TAB_X = 14 / 1280
-local TAB_Y = 452 / 720
-local TAB_SIZE = 88 / 720
+local TAB_Y = 464.5 / 720
+local TAB_SIZE = 91 / 720
 local TAB_RATIO = 1
 -- The shop tab's numbers for hover/press, but NO idle motion: the shop tab is
 -- the invitation that pulses, the alliance tab holds still (owner, 2026-09-18).

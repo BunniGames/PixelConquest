@@ -74,10 +74,23 @@ local Products = require(script.Parent.Products)
 local LobbyUI = require(script.Parent.LobbyUI)
 local PassClips = require(script.Parent.PassClips)
 local Sfx = require(script.Parent.Sfx)
+local Experiments = require(script.Parent.Experiments)
+local MoneyNote = require(script.Parent.MoneyNote)
 
 local kit = LobbyUI.kit
 local place, label, chip = kit.place, kit.label, kit.chip
 local setText = kit.setText
+
+-- THE PASS LABEL A/B (2026-10-04, Experiments.passLabelArm): the "price" arm
+-- reads the site's Robux price on the pill, the "get" arm keeps GET. Dealt
+-- once per account from the userId; asked per paint only so the owner's
+-- /shop1 / /shop2 preview can flip a page that is already up (repaintAll).
+local localPlayer = game:GetService("Players").LocalPlayer
+local function showPrice(): boolean
+	return Experiments.passLabelArm(localPlayer and localPlayer.UserId or nil) == "price"
+end
+-- Every page alive on this client (the lobby tab, the "+" page), weakly.
+local livePages = setmetatable({}, { __mode = "k" }) :: { [any]: boolean }
 local roundOff, grower, tween = kit.roundOff, kit.grower, kit.tween
 
 local PassShop = {}
@@ -452,6 +465,8 @@ local function buildRow(self: any, parent: Instance, entryDef: any, index: numbe
 	moneyStroke.Parent = moneyPill
 	local moneyState = label(moneyPill, "State", PILL_W, PILL_H, 0, (PILL_H - MONEY_TEXT) / 2, PILL_W, MONEY_TEXT, kit.INK, Enum.TextXAlignment.Center, kit.FONT_BOLD)
 	pin(moneyState, MONEY_TEXT * ts)
+	-- The banknote stands for the word (MoneyNote): "[note] 25,000".
+	MoneyNote.attach(moneyState)
 
 	-- WHAT IT GIVES, across the middle: one line per grant with a dot before
 	-- it, in columns of three. A pass with no list falls back to its blurb.
@@ -482,7 +497,12 @@ local function buildRow(self: any, parent: Instance, entryDef: any, index: numbe
 			table.insert(dots, dot)
 			local line = label(band, "Perk" .. i, CARD_W, ROW_H, x + PERK_INDENT, ly, LIST_COL_W - PERK_INDENT - 12, pitch, kit.INK, Enum.TextXAlignment.Left, kit.FONT_BOLD)
 			pin(line, PERK_TEXT * ts)
-			setText(line, text)
+			-- "+5,000 MONEY" draws as "[note] +5,000" (MoneyNote).
+			local rest, isMoney = MoneyNote.strip(text)
+			setText(line, rest)
+			if isMoney then
+				MoneyNote.attach(line)
+			end
 			table.insert(copy, line)
 		end
 	else
@@ -613,6 +633,7 @@ end
 -- uniformly (see the header). `keys` picks the passes; nil is the lobby's.
 function PassShop.new(parent: Instance, pw: number, ph: number, x: number, y: number, w: number, h: number, keys: { string }?): any
 	local self = setmetatable({}, PassShop)
+	livePages[self] = true
 	-- Nothing is known until the server says so -- same rule as the other
 	-- pages, and for the same reason: a page that priced everything while the
 	-- profile was loading would offer to sell what is already owned.
@@ -960,8 +981,15 @@ function PassShop.paintCard(self: any, entry: any)
 		-- on the buttons. say Get"): the Robux glyph beside it still says which
 		-- currency, and the price is the purchase prompt's to show. The site
 		-- is still asked (setPrice) because on-sale-or-not arrives with it.
+		-- THE "price" ARM of the pass label test shows the number after all,
+		-- once the site has given one (until then it says GET like the rest).
 		showGlyph = entry.glyph ~= nil
-		setText(entry.state, showGlyph and "GET" or "GET R$")
+		local robux = showPrice() and self.prices[entry.key] or nil
+		if robux ~= nil then
+			setText(entry.state, showGlyph and comma(robux) or ("R$ " .. comma(robux)))
+		else
+			setText(entry.state, showGlyph and "GET" or "GET R$")
+		end
 		entry.state.TextColor3 = ON_INK
 	end
 
@@ -1004,7 +1032,7 @@ function PassShop.paintCard(self: any, entry: any)
 			entry.moneyStroke.Color = kit.LINE
 			entry.moneyStroke.Transparency = 0.35
 		else
-			setText(entry.moneyState, comma(price) .. " MONEY")
+			setText(entry.moneyState, comma(price))
 			local balance = self.money
 			if balance == nil then
 				entry.moneyState.TextColor3 = kit.INK
@@ -1146,6 +1174,13 @@ end
 
 -- What the site said: the price (nil when it gave none) and whether the pass
 -- is for sale at all (nil = it did not say, taken as yes).
+-- Repaint every live page: the pass label preview flipped (/shop1, /shop2).
+function PassShop.repaintAll()
+	for page in livePages do
+		PassShop.repaint(page)
+	end
+end
+
 function PassShop.setPrice(self: any, key: string, robux: number?, forSale: boolean?)
 	self.prices[key] = robux
 	if forSale ~= nil then

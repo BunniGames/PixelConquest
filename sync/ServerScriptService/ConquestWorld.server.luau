@@ -66,6 +66,9 @@ local HELP = {
 	"  /philippines [mode]  straight to the Philippines (/phillipines too)",
 	"  /eurasia [mode]      straight to Eurasia (72 empires, 60 faux players)",
 	"  /mars [mode]         straight to Mars",
+	"  /uk [mode]           straight to the United Kingdom (/britain too)",
+	"  /india [mode]        straight to the Indian Subcontinent",
+	"  /namerica [mode]     straight to North America (/northamerica too)",
 	"  /spawn historical    put a World / historical CARD on the lobby page, no round",
 	"  /spawn <map> [mode]  any pairing on a card",
 }
@@ -112,6 +115,9 @@ local ALIASES = {
 	-- `dispatch` branches on the word. "spawn" is no map id, so the default
 	-- map stays the World.
 	{ name = "EurasiaCommand", primary = "/eurasia", secondary = "" },
+	{ name = "UkCommand", primary = "/uk", secondary = "/britain" },
+	{ name = "IndiaCommand", primary = "/india", secondary = "" },
+	{ name = "NorthAmericaCommand", primary = "/namerica", secondary = "/northamerica" },
 	{ name = "SpawnCommand", primary = "/spawn", secondary = "" },
 }
 
@@ -278,4 +284,4 @@ for _, player in Players:GetPlayers() do
 	watch(player)
 end
 
-print("[world] /world, /map, /pacific, /nyc, /japan, /korea, /africa, /philippines, /eurasia, /mars and /spawn ready -- chat /world help")
+print("[world] /world, /map, /pacific, /nyc, /japan, /korea, /africa, /philippines, /eurasia, /mars, /uk, /india, /namerica and /spawn ready -- chat /world help")

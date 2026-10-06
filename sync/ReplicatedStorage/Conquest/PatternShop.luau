@@ -27,6 +27,7 @@ local FlagShop = require(script.Parent.FlagShop)
 local PassShop = require(script.Parent.PassShop)
 local LobbyUI = require(script.Parent.LobbyUI)
 local Sfx = require(script.Parent.Sfx)
+local MoneyNote = require(script.Parent.MoneyNote)
 
 local kit = LobbyUI.kit
 local place, label, chip = kit.place, kit.label, kit.chip
@@ -342,13 +343,14 @@ function PatternShop.new(parent: Instance): any
 	-- "PATTERNS" in the kit face; with a second tab under the same panel that
 	-- heading says exactly what the tabs say, so the tabs ARE the heading. One
 	-- is always lit, which is the only job the title was doing. A third,
-	-- GAMEPASSES, joined 2026-09-21 (owner: "a 3rd tab that says gamepasses").
+	-- GAMEPASSES, joined 2026-09-21 (owner: "a 3rd tab that says gamepasses"),
+	-- relabelled BUILDINGS 2026-10-02 (owner). The id stays "passes".
 	self.tabs = {}
 	self.tab = "patterns"
 	local TAB_SPECS = {
 		{ id = "patterns", text = "PATTERNS" },
 		{ id = "flags", text = "FLAGS" },
-		{ id = "passes", text = "GAMEPASSES" },
+		{ id = "passes", text = "BUILDINGS" },
 	}
 	local TAB_W, TAB_H, TAB_GAP = 190, 36, 12
 	local tabX = (PANEL_W - (TAB_W * #TAB_SPECS + TAB_GAP * (#TAB_SPECS - 1))) / 2
@@ -408,9 +410,11 @@ function PatternShop.new(parent: Instance): any
 	patternsPage.Parent = panel
 	self.patternsPage = patternsPage
 
-	self.moneyCap = label(panel, "MoneyCap", PANEL_W, PANEL_H, PANEL_W - MARGIN - 180, 16, 180, 11, kit.INK_OFF, Enum.TextXAlignment.Right)
-	setText(self.moneyCap, "MONEY")
+	-- The banknote hugs the balance, as on the lobby bar (MoneyNote), instead
+	-- of a MONEY caption over it. Still `moneyCap`, so repaint shows and hides
+	-- it with the number.
 	self.moneyText = label(panel, "Money", PANEL_W, PANEL_H, PANEL_W - MARGIN - 180, 30, 180, 22, kit.GOLD, Enum.TextXAlignment.Right)
+	self.moneyCap = MoneyNote.attach(self.moneyText)
 
 	-- One column per tier, in catalogue order, which IS the ladder -- or two
 	-- for a tier that outgrew one; see ROWS.
@@ -505,10 +509,11 @@ function PatternShop.new(parent: Instance): any
 	-- the product has an id; once owned it says so instead of pricing itself,
 	-- because a price on a thing you have already bought is an invitation to
 	-- buy it twice.
-	local boost = pillButton(panel, "Money2x", PANEL_W, PANEL_H, MARGIN, BTN_Y, 300, BTN_H, "2x MONEY")
+	local boost = pillButton(panel, "Money2x", PANEL_W, PANEL_H, MARGIN, BTN_Y, 300, BTN_H, "2x")
 	boost.Visible = false
 	self.money2xButton = boost
 	self.money2xCaption = boost:FindFirstChild("Caption") :: TextLabel
+	MoneyNote.attach(self.money2xCaption)
 	boost.Activated:Connect(function()
 		PatternShop.pressMoney2x(self)
 	end)
@@ -695,10 +700,10 @@ function PatternShop.repaint(self: any)
 		local live = Products.isLive(Products.product("MONEY2X"))
 		self.money2xButton.Visible = self.known and (live or self.money2x)
 		if self.money2x then
-			setText(self.money2xCaption, "2x MONEY   OWNED")
+			setText(self.money2xCaption, "2x   OWNED")
 		else
 			local price = self.prices["MONEY2X"]
-			setText(self.money2xCaption, price and ("2x MONEY   R$ " .. price) or "2x MONEY")
+			setText(self.money2xCaption, price and ("2x   R$ " .. price) or "2x")
 		end
 	end
 end

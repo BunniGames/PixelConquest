@@ -1129,8 +1129,31 @@ local function entryProps(entry: any, extra: { [string]: any }?): { [string]: an
 	return props
 end
 
+-- THE PASS LABEL A/B (2026-10-04; Experiments.passLabelArm). The pass pill
+-- reads GET for half of all accounts and the real Robux price for the other
+-- half. Its OWN two events rather than an `arm` field on the purchase_* ones:
+-- fields fill slots in sorted-key order, and `arm` sorts ahead of `key`, so
+-- adding it there would shuffle every existing purchase breakdown. Here `arm`
+-- is field 1 and `key` field 2. Read: `passab_bought` count / Robux per arm
+-- (the deal is a 50/50 coin flip per account, so the two populations match),
+-- and `passab_prompt` -> `passab_bought` as the per-arm close rate.
+local experimentsOk, Experiments = pcall(function()
+	return require(game:GetService("ReplicatedStorage"):WaitForChild("Conquest"):WaitForChild("Experiments", 10) :: any)
+end)
+
+local function passArm(player: Player, entry: any): string?
+	if not experimentsOk or entry == nil or entry.kind ~= "pass" then
+		return nil
+	end
+	return Experiments.passLabelArm(player.UserId)
+end
+
 function Analytics.promptShown(player: Player, entry: any)
 	Analytics.event("purchase_prompt_shown", player, 1, entryProps(entry))
+	local arm = passArm(player, entry)
+	if arm ~= nil then
+		Analytics.event("passab_prompt", player, 1, { arm = arm, key = entry.key })
+	end
 end
 
 function Analytics.promptCancelled(player: Player, entry: any)
@@ -1139,6 +1162,10 @@ end
 
 function Analytics.promptCompleted(player: Player, entry: any, robux: number?)
 	Analytics.event("purchase_completed", player, robux or (entry and entry.robux) or 0, entryProps(entry))
+	local arm = passArm(player, entry)
+	if arm ~= nil then
+		Analytics.event("passab_bought", player, robux or entry.robux or 0, { arm = arm, key = entry.key })
+	end
 end
 
 -- The two failure events worth separating. A grant that failed is a support

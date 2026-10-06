@@ -53,6 +53,9 @@ local playerGui = player:WaitForChild("PlayerGui")
 local screen = Instance.new("ScreenGui")
 screen.Name = "ConquestFollowCurtain"
 screen.IgnoreGuiInset = true
+-- The whole glass -- see the same lines in MatchIntro.
+screen.ScreenInsets = Enum.ScreenInsets.None
+screen.ClipToDeviceSafeArea = false
 screen.ResetOnSpawn = false
 screen.DisplayOrder = 21
 screen.Enabled = false

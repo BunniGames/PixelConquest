@@ -252,6 +252,10 @@ local COSMETIC_COOLDOWN = 0.2
 -- than the COMMON tier costs and well under UNCOMMON, so it opens the bottom
 -- of the shop without skipping anybody past it.
 local REWARD_MONEY = 1000
+-- ...and the pass it hands over in place of the Chevron skin (2026-09-25,
+-- owner: "instead of chevrons, give away the mega nuke access to the player as
+-- if they bought it"). Recorded as a Money sale -- see Data.claimFreeReward.
+local REWARD_PASS = "MEGANUKE"
 -- THERE IS NO STEP GATE ANY MORE (2026-09-17, owner: "nevermind then, just
 -- have like the game for now. and invite a friend"). A group-membership gate
 -- was here for an hour and went with the JOIN THE GROUP step it belonged to;
@@ -504,11 +508,12 @@ end
 
 -- What the OTHER cards are currently offering, so a fresh draw can avoid all
 -- of it -- map, mode and pair. See Matchmaker.drawPair.
-local function shownElsewhere(board: { [string]: Record }, exceptKey: string?): { { map: string, mode: string } }
+local function shownElsewhere(board: { [string]: Record }, exceptKey: string?): { { map: string, mode: string, size: number? } }
 	local out = {}
 	for key, rec in board do
 		if key ~= exceptKey and rec.map and rec.mode and rec.state ~= "retired" then
-			table.insert(out, { map = rec.map, mode = rec.mode })
+			-- `size` so newRecord can see whether a 36 is already up.
+			table.insert(out, { map = rec.map, mode = rec.mode, size = rec.size or rec.cap })
 		end
 	end
 	return out
@@ -1245,8 +1250,11 @@ local function launchRoom(code: string, expected: number)
 		warn("[Matchmaker] ReserveServer failed for room " .. code .. ": " .. tostring(access))
 		-- Hand the room back OPEN rather than leaving it claimed until the
 		-- stale-steal timer notices. The host can simply press start again.
+		-- ONLY OUR OWN CLAIM: if this took long enough for the claim to go
+		-- stale and be reverted or re-taken, the claim now standing is someone
+		-- else's live launch and reopening it would strand that one.
 		commitRoom(code, function(r)
-			if r.state ~= "claim" then
+			if r.state ~= "claim" or r.hostServer ~= SERVER_ID then
 				return false
 			end
 			r.state = "open"
@@ -1285,7 +1293,8 @@ local function launchRoom(code: string, expected: number)
 
 	local now = os.time()
 	local published = commitRoom(code, function(r)
-		if r.state ~= "claim" then
+		-- Same ownership test as the reopen above.
+		if r.state ~= "claim" or r.hostServer ~= SERVER_ID then
 			return false
 		end
 		r.state = "ready"
@@ -1796,7 +1805,9 @@ local function startTutorial(player: Player, text: any?)
 	-- belongs in. A visit that arrived with no map would put its card rows
 	-- under nothing.
 	local mapId = tutorialMapFor(player, text)
-	Analytics.tutorialArm(player, mapId)
+	-- The arm is the map PLUS the win-bar experiment's bucket (`us_w80`), so
+	-- each bar gets its own tutorial_/playtime_ funnels. See Tutorial.armFor.
+	Analytics.tutorialArm(player, Tutorial.armFor(player.UserId, mapId))
 
 	local ok, access, psid = pcall(function()
 		return TeleportService:ReserveServer(game.PlaceId)
@@ -2028,6 +2039,16 @@ LobbyIntentRE.OnServerEvent:Connect(function(player, action, key, tag)
 	local userId = player.UserId
 	local now = os.clock()
 
+	-- RANKED (2026-10-05): entering a board match, a room or the lesson takes
+	-- this player out of the ranked queue (RankedLobby listens), so the two can
+	-- never both teleport them.
+	if action == "join" or action == "pjoin" or action == "create" or action == "tutorial" then
+		local cancel = game:GetService("ServerStorage"):FindFirstChild("RankedCancel")
+		if cancel and cancel:IsA("BindableEvent") then
+			cancel:Fire(player)
+		end
+	end
+
 	-- THE CLAN TAG IS TAKEN BEFORE EITHER GATE, because it is the one thing on
 	-- this remote that is free: a write into a local table, no MemoryStore
 	-- behind it and nothing to serialise. Gating it would mean a tag typed
@@ -2127,8 +2148,8 @@ LobbyIntentRE.OnServerEvent:Connect(function(player, action, key, tag)
 			return
 		end
 		cosmeticAt[userId] = now
-		local skin = Patterns.REWARD_KEY
-		if not Data.claimFreeReward(player, REWARD_MONEY, skin) then
+		local claimed, gifted = Data.claimFreeReward(player, REWARD_MONEY, REWARD_PASS)
+		if not claimed then
 			-- TWO VERY DIFFERENT REFUSALS, and the player is owed which one it
 			-- was. Already claimed is a fact about the account and the sheet
 			-- corrects itself; a profile that has not loaded is a DataStore that
@@ -2143,13 +2164,16 @@ LobbyIntentRE.OnServerEvent:Connect(function(player, action, key, tag)
 		end
 		-- DURABLE BEFORE IT IS ANNOUNCED. If the write fails the grant is taken
 		-- back out of memory -- otherwise the latch survives, the player never
-		-- sees the skin, and the sheet refuses to give it to them again.
+		-- sees the pass, and the sheet refuses to give it to them again.
 		if not Data.flush(player) then
-			Data.unclaimFreeReward(player, REWARD_MONEY, skin)
+			Data.unclaimFreeReward(player, REWARD_MONEY, REWARD_PASS, gifted)
 			sendPatterns(player)
 			-- ON THE SHEET, not the page. See sendReward.
 			sendReward(player, "COULD NOT SAVE THAT -- TRY AGAIN")
 			return
+		end
+		if gifted then
+			Monetization.passGifted(player, REWARD_PASS)
 		end
 		sendPatterns(player)
 		return
@@ -2725,6 +2749,71 @@ Monetization.onVipSettled(function(player)
 	LobbyRE:FireClient(player, "money", Data.money(player))
 	sendPatterns(player)
 end)
+
+-- ---------------------------------------------------------- community ----
+--
+-- JOIN THE COMMUNITY, ASKED ONCE PER ACCOUNT, the first time it walks back
+-- onto this page out of a round (owner, 2026-10-02: "prompt them to join the
+-- community after they return from their first game" -- and accounts that
+-- already had rounds behind them get the one prompt too, on their next return).
+--
+-- `fromMatch` is put on the teleport by ConquestServer's two ways home, and by
+-- nothing else: a first join, a friend follow or a bounce has not just played
+-- anything. The dialog itself is GroupService:PromptJoinAsync, which is
+-- client-only, so this decides and LobbyClient asks.
+--
+-- MEMBERS ARE LATCHED WITHOUT BEING ASKED: someone already in has nothing to
+-- be prompted for, and checking again on every return is a web call for an
+-- answer that will not change. An IsInGroup that ERRORS latches nothing -- the
+-- next return tries again rather than either nagging a member or never asking.
+local COMMUNITY_ID = 207353550
+
+local function promptCommunity(player: Player)
+	local okJoin, data = pcall(function()
+		return player:GetJoinData().TeleportData
+	end)
+	if not (okJoin and type(data) == "table" and data.fromMatch == true) then
+		return
+	end
+	local profile = Data.get(player)
+	if profile == nil or profile.communityPrompted == true then
+		return
+	end
+	local okGroup, member = pcall(function()
+		return player:IsInGroup(COMMUNITY_ID)
+	end)
+	if not okGroup or player.Parent == nil then
+		return
+	end
+	if not Data.markCommunityPrompted(player) or member then
+		return
+	end
+	LobbyRE:FireClient(player, "community", COMMUNITY_ID)
+end
+
+-- Off the profile's ready callback, not PlayerAdded: the latch lives in the
+-- profile, and the profile is seconds behind anyone walking out of a match.
+Data.onReady(function(player, _profile)
+	task.spawn(promptCommunity, player)
+end)
+
+-- /testcommunity: shows the same dialog on demand, skipping every gate above
+-- (no latch read or written, no membership check), so the prompt itself can
+-- be looked at without a round. Created HERE so it replicates; LobbyClient
+-- answers it, owner-only, and reads the community off the attribute so the id
+-- stays spelled out in one place.
+do
+	local TextChatService = game:GetService("TextChatService")
+	local cmd = TextChatService:FindFirstChild("TestCommunityCommand")
+	if not cmd then
+		local c = Instance.new("TextChatCommand")
+		c.Name = "TestCommunityCommand"
+		c.PrimaryAlias = "/testcommunity"
+		c.Parent = TextChatService
+		cmd = c
+	end
+	cmd:SetAttribute("GroupId", COMMUNITY_ID)
+end
 
 -- ------------------------------------------------------------- follow ----
 --

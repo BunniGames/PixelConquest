@@ -49,6 +49,14 @@ local function friendly(sim: any, a: number, b: number): boolean
 	if a == b then
 		return true
 	end
+	-- A HUNTER AI's shot leaves a person untouched (Config.BOT_HUNTER_ARSENAL;
+	-- Sim.hunterSpares, inlined). Only the impact asks this function.
+	if Config.BOT_HUNTER_ARSENAL then
+		local pa, pb = sim.players[a], sim.players[b]
+		if pa ~= nil and pa.aiHunter and pb ~= nil and not pb.isBot then
+			return true
+		end
+	end
 	if Alliances.allied(sim, a, b) then
 		return true
 	end

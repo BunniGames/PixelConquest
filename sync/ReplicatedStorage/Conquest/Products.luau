@@ -368,6 +368,25 @@ local DEV_PRODUCTS: { [string]: Entry } = {
 		blurb = "Knocked out? Take command of an AI empire and fight on.",
 		robux = 29,
 	},
+	-- THE ROUND'S PAY, TRIPLED (owner, 2026-09-29: "add a X3 money button after
+	-- the game ends ... buy a dev product, to get 3x the normal money they
+	-- normally wouldve gotten"). Offered on the end-of-round screen ONLY, to
+	-- everyone still in the server when the round is won -- survivors and the
+	-- knocked out who stayed to watch. "Normal" is what the round actually paid,
+	-- 2x Money included, so the purchase adds TWICE that and the round ends up
+	-- worth three times itself. The offer is banked on the profile
+	-- (Data.setMoney3xOffer) so a receipt that lands on the lobby after the
+	-- teleport still pays; see the MONEY3X grant in ConquestMonetization.
+	MONEY3X = {
+		key = "MONEY3X",
+		kind = "product",
+		-- Confirmed 2026-09-29: GetProductInfo returns developer product
+		-- "3x Money", 9 R$, IsForSale true; the GamePass InfoType fails.
+		id = 3715571470,
+		name = "3x Money",
+		blurb = "Triple what this round paid you.",
+		robux = 9,
+	},
 	-- BOOSTED SKINS. Each is a territory pattern (Patterns, tier "boosted")
 	-- that also grows troops 10% faster while worn. One product per skin so
 	-- each is priced and tracked on its own; the def in Patterns.LIST names
@@ -510,8 +529,22 @@ local DEV_PRODUCTS: { [string]: Entry } = {
 		-- Doubles the TILE BUDGET an attack spends per tick, which is what
 		-- "attack speed" is in this sim -- not troop loss, not damage. Land
 		-- arrives twice as fast; what it costs in troops is untouched.
-		blurb = "Your attacks take ground twice as fast for the rest of the lesson.",
+		-- A TIMED BOOST since 2026-10-03 (Config.TIMED_BOOSTS): 15 minutes of
+		-- double attack speed, not a per-round token.
+		blurb = "Your attacks take ground 50% faster for 15 minutes.",
 		robux = 32,
+	},
+	-- 2x GOLD (2026-10-03), the second timed boost: double gold income for 15
+	-- minutes (Config.TIMED_BOOSTS). ARMED 2026-10-03: GetProductInfo returns
+	-- developer product "Gold Boost [2X]", 40 R$, IsForSale true; the GamePass
+	-- InfoType fails on it.
+	BOOST_GOLD = {
+		key = "BOOST_GOLD",
+		kind = "product",
+		id = 3716396322,
+		name = "Gold Boost [2X]",
+		blurb = "Double gold income for 15 minutes.",
+		robux = 40,
 	},
 
 	-- ==================================== 2026-09-17: Starter Pack #1 ==
@@ -568,6 +601,43 @@ local DEV_PRODUCTS: { [string]: Entry } = {
 		-- DISPLAY ONLY -- every shop re-asks GetProductInfo and overwrites this;
 		-- it exists so a card can be laid out before that async answer lands.
 		robux = 40,
+	},
+
+	-- ==================================== 2026-09-27: Railgun Bundle ==
+	--
+	-- (owner, 2026-09-27): three nukes, one railgun placed for the buyer near
+	-- their homeland's centre, and one defence post. NOT the RAILGUN pass --
+	-- that is a separate game pass which happens to share the name on the
+	-- site; this is a developer product and repeatable. What it grants is
+	-- Config's Railgun Bundle block and ConquestServer.BOOSTS.RAILGUN_BUNDLE.
+	RAILGUN_BUNDLE = {
+		key = "RAILGUN_BUNDLE",
+		kind = "product",
+		-- Confirmed 2026-09-27: GetProductInfo returns developer product
+		-- "Railgun Bundle", 120 R$, IsForSale true; the GamePass InfoType fails.
+		id = 3715177417,
+		name = "Railgun Bundle",
+		blurb = "Three nukes, a railgun built near your homeland's centre, and a free defence tower.",
+		robux = 120,
+	},
+
+	-- ===================================== 2026-10-02: General Pack ==
+	--
+	-- (owner, 2026-10-02: "below railgun, I want you to sell General Pack thats
+	-- the 1M army dev product"). A million troops as the HUD prints it, at
+	-- once and past the cap -- Config.GENERAL_PACK_ARMY and
+	-- ConquestServer.BOOSTS.GENERAL_PACK. Sold off the store's GeneralPack
+	-- strip, under the Railgun Bundle's.
+	GENERAL_PACK = {
+		key = "GENERAL_PACK",
+		kind = "product",
+		-- Created by the owner 2026-10-02. The site still names it "+1 Million
+		-- Army Size!", the same name as TUTORIAL_ARMY (3712497058) -- a
+		-- different product, which grants 100K.
+		id = 3716066107,
+		name = "+1 Million Army Size!",
+		blurb = "1,000,000 troops at once, even past your army cap, and a free nuke.",
+		robux = 449,
 	},
 
 	-- ================================ 2026-09-17: the gold top-ups ==

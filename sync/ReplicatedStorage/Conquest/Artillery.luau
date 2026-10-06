@@ -67,8 +67,19 @@ local function hostile(sim: any, me: number, other: number): boolean
 	if other == 0 or other == me then
 		return false
 	end
-	if sim.players[other] == nil then
+	local victim = sim.players[other]
+	if victim == nil then
 		return false
+	end
+	-- A HUNTER AI's gun shells AI ground only (Config.BOT_HUNTER_ARSENAL;
+	-- Sim.hunterSpares, inlined -- Sim requires this module). Read at the
+	-- aimpoint AND at impact, so a shell whose ground changed hands in the
+	-- air lands on a person as a dud.
+	if Config.BOT_HUNTER_ARSENAL and not victim.isBot then
+		local shooter = sim.players[me]
+		if shooter ~= nil and shooter.aiHunter then
+			return false
+		end
 	end
 	return not Alliances.isFriendly(sim, me, other)
 end

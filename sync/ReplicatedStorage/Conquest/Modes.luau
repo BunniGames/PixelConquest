@@ -33,6 +33,11 @@ export type ModeData = {
 	HISTORICAL: boolean?,
 	-- The special opening, on the occasional modes only. See Special.
 	SPECIAL: Special?,
+	-- A second line the lobby card draws under the mode's pill. Absent on most.
+	SUBTITLE: string?,
+	-- Whenever this mode's lobby is on the board, it takes the big card
+	-- (LobbyUI.rankBoard). Absent on most.
+	FEATURED: boolean?,
 }
 
 -- Order is the rotation order.
@@ -71,6 +76,17 @@ Modes.BY_ID = {
 		TEAMS = 3,
 		WIN = 0.90,
 		BLURB = "Three-way war. Every border is someone else's.",
+	},
+	-- RANKED (2026-10-05): the mode every ranked round runs as -- two sides,
+	-- humans only (ConquestServer drops the AI filler), sides fixed by the
+	-- lobby that formed the match (Conquest.Ranked / RankedLobby). 1v1 is two
+	-- sides of one. NOT IN ORDER: it is never on the public rotation.
+	ranked = {
+		NAME = "RANKED",
+		SHORT = "RANKED",
+		TEAMS = 2,
+		WIN = 0.90,
+		BLURB = "Rated. Two sides, no AI. Climb the ladder.",
 	},
 	-- HISTORICAL (2026-09-11): the borders are drawn before anyone clicks.
 	-- STILL NOT IN ORDER, deliberately: ORDER is the rotation, and in it this
@@ -152,8 +168,14 @@ Modes.BY_ID = {
 		BLURB = "Everyone opens with a million troops, and a million more room to hold them.",
 		SPECIAL = { startTroops = 1000000, troopCapBonus = 1000000 },
 	},
+	-- Renamed from NUCLEAR WAR (2026-10-02, owner: "when its displayed, call it
+	-- Admin Abuse. And another line below it. Chaos Mode. Make it always appear
+	-- in the biggest frame"). The id stays `nuclear` so the owner commands and
+	-- saved ids still work. SUBTITLE is the second line, FEATURED the big card.
 	nuclear = {
-		NAME = "NUCLEAR WAR",
+		NAME = "ADMIN ABUSE",
+		SUBTITLE = "CHAOS MODE",
+		FEATURED = true,
 		SHORT = "10 NUKES",
 		TEAMS = 0,
 		WIN = 0.90,
@@ -218,6 +240,14 @@ end
 
 function Modes.isSpecial(id: string?): boolean
 	return Modes.get(id).SPECIAL ~= nil
+end
+
+function Modes.subtitle(id: string?): string?
+	return Modes.get(id).SUBTITLE
+end
+
+function Modes.isFeatured(id: string?): boolean
+	return Modes.get(id).FEATURED == true
 end
 
 -- The special ids, sorted -- the lobby's draw pool and the owner commands'

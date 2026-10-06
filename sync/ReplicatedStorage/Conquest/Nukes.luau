@@ -1617,6 +1617,8 @@ function Nukes.launchScattershot(sim: any, playerId: number, dst: number): (bool
 	local base = rng:NextNumber() * math.pi * 2
 	local speed = Nukes.speed(Units.SCATTERSHOT)
 	local fired = 0
+	local shooter = sim.players[playerId]
+	local hunterShot = Config.BOT_HUNTER_ARSENAL and shooter ~= nil and shooter.aiHunter == true
 	for i = 1, count do
 		local target: number? = nil
 		for _ = 1, 6 do
@@ -1628,6 +1630,11 @@ function Nukes.launchScattershot(sim: any, playerId: number, dst: number): (bool
 				local t = y * W + x
 				local o = buffer.readu8(map.owner, t)
 				local mine = o ~= 0 and (o == playerId or (sim.sameTeam ~= nil and sim:sameTeam(playerId, o)))
+				-- A HUNTER AI's warheads never land on a person (Config.BOT_HUNTER_ARSENAL).
+				if not mine and o ~= 0 and hunterShot then
+					local victim = sim.players[o]
+					mine = victim ~= nil and not victim.isBot
+				end
 				if notImpassable(map, t) and not mine then
 					target = t
 					break
@@ -2698,6 +2705,11 @@ local function findNukeTarget(sim: any, p: any): any
 	if best == nil then
 		return nil
 	end
+	-- A HUNTER (Config.BOT_HUNTER_ARSENAL) does not wait for a runaway: the
+	-- biggest AI it may hit is its target, and aiThink paces its launches.
+	if p.aiHunter and Config.BOT_HUNTER_ARSENAL then
+		return best
+	end
 	if best.tileCount / land - p.tileCount / land > 0.2 then
 		return best
 	end
@@ -2814,13 +2826,29 @@ function Nukes.aiThink(sim: any, p: any)
 		return
 	end
 
+	-- A HUNTER'S PACE (Config.BOT_HUNTER_NUKE_INTERVAL): with its target no
+	-- longer gated on a runaway, the interval is what keeps it from emptying
+	-- the silo on every reload.
+	local hunter = p.aiHunter == true and Config.BOT_HUNTER_ARSENAL == true
+	local s = aiState(p)
+	if hunter and sim.tick - (s.lastHunterLaunch or -100000) < (Config.BOT_HUNTER_NUKE_INTERVAL or 450) then
+		return
+	end
+
 	local target = findNukeTarget(sim, p)
 	if target == nil then
 		return
 	end
 
 	local utype: number
-	if p.gold >= perceivedCost(sim, p, Units.HYDROGEN_BOMB) then
+	-- A hunter that rolls the scattershot SAVES for it rather than settling
+	-- for a bomb, so the salvo actually turns up.
+	if hunter and sim.rng:NextNumber() < (Config.BOT_HUNTER_SCATTERSHOT_CHANCE or 0.5) then
+		if p.gold < Units.cost(sim, p.id, Units.SCATTERSHOT) then
+			return
+		end
+		utype = Units.SCATTERSHOT
+	elseif p.gold >= perceivedCost(sim, p, Units.HYDROGEN_BOMB) then
 		utype = Units.HYDROGEN_BOMB
 	-- A WARHEAD IN HAND IS AFFORDABLE (NUCLEAR WAR, 2026-09-18: Modes.SPECIAL
 	-- startNukes puts ten atom bombs on every empire, bots included). Priced
@@ -2834,7 +2862,6 @@ function Nukes.aiThink(sim: any, p: any)
 		return
 	end
 
-	local s = aiState(p)
 	local cutoff = sim.tick - 600 -- NationNukeBehavior.ts:490-499
 	local kept = {}
 	for _, r in s.recent do
@@ -2885,6 +2912,12 @@ function Nukes.aiThink(sim: any, p: any)
 	-- a better aimpoint and never costs a player a city.
 	local scans = 0
 	local blastMag = CFG.MAGNITUDE[utype]
+	-- A scattershot's warheads land up to SPREAD_MAX from the aimpoint, so
+	-- the person check covers that ring plus a warhead's own blast.
+	local personReach = blastMag.outer
+	if utype == Units.SCATTERSHOT then
+		personReach = math.max(personReach, (Config.SCATTERSHOT_SPREAD_MAX or 46) + CFG.MAGNITUDE[Units.MIRV_WARHEAD].outer)
+	end
 	for _, tile in candidates do
 		if not seen[tile] then
 			seen[tile] = true
@@ -2898,7 +2931,7 @@ function Nukes.aiThink(sim: any, p: any)
 					-- off all but a handful of candidates.
 					if value > bestValue and scans < PERSON_SCAN_BUDGET then
 						scans += 1
-						if not blastTouchesPerson(sim, tile, blastMag.outer) then
+						if not blastTouchesPerson(sim, tile, personReach) then
 							bestValue = value
 							bestTile = tile
 						end
@@ -2909,10 +2942,17 @@ function Nukes.aiThink(sim: any, p: any)
 	end
 
 	if bestTile ~= nil then
-		local ok = Nukes.launchNuke(sim, p.id, utype, bestTile)
+		local ok = if utype == Units.SCATTERSHOT
+			then Nukes.launchScattershot(sim, p.id, bestTile)
+			else Nukes.launchNuke(sim, p.id, utype, bestTile)
 		if ok then
 			s.recent[#s.recent + 1] = { tick = sim.tick, tile = bestTile, utype = utype }
-			if utype == Units.ATOM_BOMB then
+			if hunter then
+				s.lastHunterLaunch = sim.tick
+			end
+			if utype == Units.SCATTERSHOT then
+				-- Its own price; the bombs' saving-up pretence is untouched.
+			elseif utype == Units.ATOM_BOMB then
 				s.atomCost = (s.atomCost or Units.cost(sim, p.id, utype)) * 1.5
 			else
 				s.hydroCost = (s.hydroCost or Units.cost(sim, p.id, utype)) * 1.25

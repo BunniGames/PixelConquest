@@ -30,8 +30,17 @@
 -- a PlayerGui and the folder there does not exist at all. StarterGui itself
 -- replicates, so the template is readable from here either way.
 --
--- THIS STICKER IS TUTORIAL-ONLY (owner, 2026-09-17), and it still is: see
--- `gui.Enabled = lessonLive and phase == "playing"` at the foot of this file.
+-- THIS STICKER WAS TUTORIAL-ONLY (owner, 2026-09-17). It is not any more
+-- (owner, 2026-09-27: "I want the Pro pack to be sold the exact same way
+-- during normal games"): a lesson round still sells Starter Pack #1 here, and
+-- every ordinary round sells the PRO PACK (Starter Pack #2) off the same card
+-- and page. See PACKS near the top and `refresh` at the foot of this file.
+--
+-- A LADDER, NOT ONE OFFER (owner, 2026-09-29: "after a player buys the
+-- startpack1, show them starterpack 2 in the same spot, then railgun bundle.
+-- In an actual game ... starterpack2 then railgun bundle"). Each buy moves the
+-- sticker to the next rung for the rest of THIS round; the rung after the
+-- Railgun Bundle is nothing, and the sticker goes. See LADDER and `bought`.
 --
 -- THE PACK IS NOT, ANY MORE. Later the same day the owner asked for the kit's
 -- Starter Pack card back in the main store ("add the startpack card back to the
@@ -80,6 +89,52 @@ local ShopRE = netFolder:WaitForChild("Shop") :: RemoteEvent
 local player = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
 
+-- WHICH PACK THE STICKER SELLS, BY ROUND (owner, 2026-09-27: "I want the Pro
+-- pack to be sold the exact same way during normal games"). A lesson round
+-- sells Starter Pack #1, as it always has; every other round sells the PRO
+-- PACK -- Starter Pack #2 on the site, see TutorialShopClient's note -- off
+-- the same sticker and the same page. `rows` are the page's three tiles,
+-- drawn off StarterGui.Images by name; the PRO rows are TutorialShopClient's
+-- PACK2_ROWS, which are Config.STARTER_PACK2_* in words. `refresh` at the
+-- foot of the file picks one; `applyPack` writes it onto the card.
+local PACKS = {
+	STARTER_PACK = {
+		title = "STARTER PACK",
+		header = "Starter Pack",
+		rows = {
+			{ image = "Sword", name = "Army", amount = "+25K" },
+			{ image = "Gold", name = "Gold", amount = "+100K" },
+			{ image = "Tower", name = "Defence", amount = "x1" },
+		},
+	},
+	STARTER_PACK2 = {
+		title = "PRO PACK",
+		header = "Pro Pack",
+		rows = {
+			{ image = "Tower", name = "Defence", amount = "x3" },
+			{ image = "Building", name = "City", amount = "x1" },
+			{ image = "IronDome", name = "Anti-Nuke", amount = "x1" },
+		},
+	},
+	-- THE RAILGUN BUNDLE (owner, 2026-09-29): ONE BIG TILE, no blurb -- "can
+	-- just say X1 Railgun". `single` hides tiles 2 and 3 and grows the row;
+	-- `icon` is the sticker's own picture, which for the packs is the gift box.
+	RAILGUN_BUNDLE = {
+		title = "RAILGUN",
+		header = "Railgun Bundle",
+		icon = "Railgun Shop",
+		single = true,
+		rows = {
+			{ image = "Railgun Shop", name = "Railgun", amount = "x1" },
+		},
+	},
+}
+-- THE ORDER THE STICKER WALKS, per kind of round. A buy of the rung on offer
+-- moves it to the next one not yet bought this round (`bought`, below).
+local LADDER = {
+	lesson = { "STARTER_PACK", "STARTER_PACK2", "RAILGUN_BUNDLE" },
+	match = { "STARTER_PACK2", "RAILGUN_BUNDLE" },
+}
 local PRODUCT_KEY = "STARTER_PACK"
 
 -- WHERE THE STACK SITS, AND IT IS NOT WHERE THE ART PUTS IT. The template parks
@@ -177,15 +232,22 @@ if template == nil or not template:IsA("ScreenGui") then
 	return
 end
 
-local entry = Products.product(PRODUCT_KEY)
--- AN UNCONFIGURED PRODUCT NEVER APPEARS IN A SHOP -- Products' header rule. With
--- one card and one product, that means no ScreenGui at all rather than an empty
+-- AN UNCONFIGURED PRODUCT NEVER APPEARS IN A SHOP -- Products' header rule. A
+-- pack that is not live is left out of `liveKeys`, and `refresh` never offers
+-- it; with neither live there is no ScreenGui at all rather than an empty
 -- frame sitting on the HUD.
-if not Products.isLive(entry) then
-	warn("[TutorialDeal] " .. PRODUCT_KEY .. " is not configured; no deal offered.")
+local liveKeys: { [string]: any } = {}
+for key in PACKS do
+	local entry = Products.product(key)
+	if Products.isLive(entry) then
+		liveKeys[key] = entry
+	else
+		warn("[TutorialDeal] " .. key .. " is not configured; that deal is not offered.")
+	end
+end
+if next(liveKeys) == nil then
 	return
 end
-local product = entry :: any
 
 local gui = (template :: ScreenGui):Clone()
 gui.Name = "ConquestDeal"
@@ -433,6 +495,7 @@ local shop2: GuiObject? = nil
 local panelFrames: GuiObject? = nil
 local panelScale: UIScale? = nil
 local panelPrice: TextLabel? = nil
+local panelGlyph: ImageLabel? = nil
 
 if panelTemplate ~= nil and panelTemplate:IsA("ScreenGui") then
 	local p = (panelTemplate :: ScreenGui):Clone()
@@ -471,15 +534,13 @@ if panelTemplate ~= nil and panelTemplate:IsA("ScreenGui") then
 	end
 end
 
-local PACK_ROWS = {
-	-- "+25K" AND NOT "+250,000": troops reach the screen as troops/10
-	-- (Numbers.formatTroops), so the card prints what the player's own readout
-	-- will print. Config.STARTER_PACK_ARMY_BONUS holds the raw figure.
-	{ image = "Sword", name = "Army", amount = "+25K" },
-	-- Gold is not divided on the way out, so this figure is literal.
-	{ image = "Gold", name = "Gold", amount = "+100K" },
-	{ image = "Tower", name = "Defence", amount = "x1" },
-}
+-- The page's three reward tiles, kept so applyPack can rewrite them when the
+-- pack on offer changes. What goes in them is PACKS[...].rows. (Starter Pack
+-- #1's "+25K" is troops/10, as Numbers.formatTroops prints them;
+-- Config.STARTER_PACK_ARMY_BONUS holds the raw figure.)
+local packTiles: { [number]: Instance } = {}
+-- ...and the row that holds them, which a `single` pack grows to TILE_BIG.
+local packBox: GuiObject? = nil
 
 -- THE PAGE IS THREE TILES AND A BUTTON, NOT A CARD (owner, 2026-09-17: "I
 -- literally just want the 3 smaller boxes showing the 3 items. on the bigger
@@ -504,6 +565,10 @@ local PACK_ROWS = {
 -- 0.37 measured at 14 px a side on the editor's page -- cramped against the
 -- tiles' own strokes.
 local TILE, TILE_Y = 0.35, 0.46
+-- A ONE-ITEM PAGE (the Railgun Bundle) draws its lone tile at this height
+-- instead: 0.46 +- 0.25 is 0.21..0.71, clear of the header (0.155) above and
+-- the pill's top (0.93 - 0.135 = 0.795) below.
+local TILE_BIG = 0.5
 local PILL, PILL_Y = 0.135, 0.93
 
 -- ONE FAMILY FOR EVERY WORD ON THE PAGE (owner, 2026-09-17: "the text font
@@ -632,11 +697,12 @@ if shop2 ~= nil then
 		ar.AspectRatio = 1
 		ar.DominantAxis = Enum.DominantAxis.Height
 		ar.Parent = box
-		for i, r in PACK_ROWS do
+		-- The words and the icon are the PACK's and are written by applyPack;
+		-- this loop builds only what every pack shares.
+		for i = 1, 3 do
 			local tile = box:FindFirstChild(tostring(i))
 			if tile ~= nil then
-				setAll(tile, "Name", r.name)
-				setAll(tile, "Amount", r.amount)
+				packTiles[i] = tile
 				-- THE AMOUNT IS CENTRED, LIKE THE NAME ABOVE IT. The kit right-aligns
 				-- it -- its own placeholder was "$1M/s" running to the corner -- so
 				-- "+25K" hugged the bottom-right while "Army" sat centred at the top:
@@ -645,11 +711,6 @@ if shop2 ~= nil then
 					if c:IsA("TextLabel") then
 						c.TextXAlignment = Enum.TextXAlignment.Center
 					end
-				end
-				local ti = tile:FindFirstChild("Icon")
-				if ti ~= nil and ti:IsA("ImageLabel") then
-					ti.Image = imageOf(r.image)
-					ti.ScaleType = Enum.ScaleType.Fit
 				end
 				-- The burst sits under the icon (ZIndex 0) and the words (3); the tile
 				-- clips it, the way the store's square cards clip theirs.
@@ -673,6 +734,7 @@ if shop2 ~= nil then
 		restyle(box)
 		popper(box)
 		box.Parent = page
+		packBox = box
 	end
 	
 	-- THE TILL, centred on the bottom edge. The pill inside is 3 x 1 of this
@@ -692,6 +754,7 @@ if shop2 ~= nil then
 				panelPrice = x
 			elseif x:IsA("ImageLabel") and x.Parent ~= nil and x.Parent.Name == "Info" then
 				squareGlyph(x)
+				panelGlyph = x
 			elseif x:IsA("GuiButton") then
 				juice(x, POP_GO, buy)
 			end
@@ -908,27 +971,103 @@ end
 -- catalogue's `robux` is only what to draw until the answer lands. BOTH labels
 -- are written from one place -- the sticker's and the panel's -- because two
 -- writers for one number is how they come to disagree.
+--
+-- THE PRO PACK'S ROBUX SIGN IS IN THE TEXT (owner, 2026-09-27: "have the image
+-- of the robux/text of the robux in the same text box as the number for the
+-- pro pack"). U+E002 is the engine's own Robux glyph, drawn inline by any
+-- TextLabel, so the sign and the number sit in ONE box and cannot drift apart;
+-- the separate glyph images (the sticker's and the pill's) are hidden while it
+-- is up. Starter Pack #1 keeps its images, as it was.
+local ROBUX_CHAR = utf8.char(0xE002)
+
 local function paintPrice(n: number)
+	-- The Railgun Bundle is drawn the Pro Pack's way: it follows it on the same
+	-- sticker, and the price should not change style between the two rungs.
+	local inline = PRODUCT_KEY ~= "STARTER_PACK"
+	local text = if inline then ROBUX_CHAR .. tostring(n) else tostring(n)
 	if priceLabel ~= nil then
-		priceLabel.Text = tostring(n)
+		priceLabel.Text = text
 	end
 	if panelPrice ~= nil then
 		local pp = panelPrice :: TextLabel
-		pp.Text = tostring(n)
+		pp.Text = text
+	end
+	if glyph ~= nil then
+		glyph.Visible = not inline
+	end
+	if panelGlyph ~= nil then
+		local pg = panelGlyph :: ImageLabel
+		pg.Visible = not inline
 	end
 end
-paintPrice(product.robux)
-task.spawn(function()
-	local ok, info = pcall(function()
-		return MarketplaceService:GetProductInfo(product.id, Enum.InfoType.Product)
-	end)
-	if ok and type(info) == "table" then
-		local real = tonumber((info :: any).PriceInRobux)
-		if real ~= nil then
-			paintPrice(real)
+-- ONE CARD, EITHER PACK. Writes the pack's title on the sticker, its name on
+-- the page header, its three tiles and its price. The site's price for each
+-- live pack is asked for once and cached, so switching packs never shows the
+-- other pack's figure.
+local realPrice: { [string]: number } = {}
+
+local function applyPack(key: string)
+	PRODUCT_KEY = key
+	local pack = PACKS[key]
+	setAll(deal, "Name", pack.title)
+	-- The sticker's picture: the gift box for a pack, the rung's own art
+	-- otherwise. An empty answer keeps what is there (see the note on `art`).
+	if art ~= nil then
+		local pic = imageOf(pack.icon or "Reward")
+		if pic ~= "" then
+			art.Image = pic
 		end
 	end
-end)
+	-- ONE BIG TILE OR THREE. The row is a centred list, so hiding 2 and 3
+	-- leaves 1 in the middle; the row's height is what makes it big.
+	if packBox ~= nil then
+		local pb = packBox :: GuiObject
+		pb.Size = UDim2.fromScale(1, if pack.single then TILE_BIG else TILE)
+	end
+	for i, tile in packTiles do
+		if tile:IsA("GuiObject") then
+			tile.Visible = pack.rows[i] ~= nil
+		end
+	end
+	if shop2 ~= nil then
+		local header = shop2:FindFirstChild("Header")
+		if header ~= nil then
+			setAll(header, "Name", pack.header)
+		end
+	end
+	for i, r in pack.rows do
+		local tile = packTiles[i]
+		if tile ~= nil then
+			setAll(tile, "Name", r.name)
+			setAll(tile, "Amount", r.amount)
+			local ti = tile:FindFirstChild("Icon")
+			if ti ~= nil and ti:IsA("ImageLabel") then
+				ti.Image = imageOf(r.image)
+				ti.ScaleType = Enum.ScaleType.Fit
+			end
+		end
+	end
+	paintPrice(realPrice[key] or liveKeys[key].robux)
+end
+
+for key, entry in liveKeys do
+	task.spawn(function()
+		local ok, info = pcall(function()
+			return MarketplaceService:GetProductInfo(entry.id, Enum.InfoType.Product)
+		end)
+		if ok and type(info) == "table" then
+			local real = tonumber((info :: any).PriceInRobux)
+			if real ~= nil then
+				realPrice[key] = real
+				if PRODUCT_KEY == key then
+					paintPrice(real)
+				end
+			end
+		end
+	end)
+end
+
+applyPack(if liveKeys.STARTER_PACK ~= nil then "STARTER_PACK" else "STARTER_PACK2")
 
 -- ============================================================ the motion =====
 
@@ -1006,8 +1145,45 @@ local lessonLive = false
 -- `finished` / `failed` come off the lesson state itself: a student who has
 -- completed or washed out of the track is no longer in a tutorial, whatever the
 -- round still says.
+--
+-- THE PRO PACK IN AN ORDINARY ROUND (2026-09-27) is gated the same way and for
+-- the same reason, with the one guarantee the lesson gave for free spelled out:
+-- a student is protected, a PvP player is not, so the card is up only while
+-- the HUD's action rail is. The HUD shows the rail exactly while the round is
+-- playing, this player has spawned and their empire stands (HUD.showActions,
+-- setDefeated) -- which is redeemBoost's "live empire" check, read off the
+-- screen. `tutorialRound` LATCHES: once this round has been a lesson it never
+-- sells the Pro Pack, including after the track ends.
+local tutorialRound = false
+local railUp = false
+
+-- WHAT THIS PLAYER HAS BOUGHT OFF THE STICKER THIS ROUND, by product key
+-- (owner, 2026-09-29: "this round only"). Cleared when a new round starts
+-- (`init`, or the phase going back to lobby/spawn). A skipped rung -- one not
+-- live on the site -- is stepped over exactly like a bought one.
+local bought: { [string]: boolean } = {}
+
+local function nextRung(ladder: { string }): string?
+	for _, key in ladder do
+		if not bought[key] and liveKeys[key] ~= nil then
+			return key
+		end
+	end
+	return nil
+end
+
 local function refresh()
-	gui.Enabled = lessonLive and phase == "playing"
+	local want: string? = nil
+	if lessonLive then
+		want = nextRung(LADDER.lesson)
+	elseif not tutorialRound and railUp then
+		want = nextRung(LADDER.match)
+	end
+	if want ~= nil and want ~= PRODUCT_KEY then
+		setOpen(false)
+		applyPack(want)
+	end
+	gui.Enabled = want ~= nil and phase == "playing"
 	-- THE PANEL GOES WITH THE CARD. If the lesson ends while the shop is open,
 	-- a full-screen panel would otherwise stay up over a round it can no longer
 	-- sell into.
@@ -1035,14 +1211,25 @@ end
 StateRE.OnClientEvent:Connect(function(kind, payload)
 	local p: any = payload
 	if kind == "init" then
+		bought = {}
 		phase = (if type(p) == "table" then tostring(p.phase) else "")
 		lessonLive = lessonFrom(if type(p) == "table" then p.tutorial else nil)
+		if lessonLive then
+			tutorialRound = true
+		end
 	elseif kind == "tutorial" then
 		lessonLive = lessonFrom(p)
+		if lessonLive then
+			tutorialRound = true
+		end
 	elseif kind == "phase" then
 		if type(p) == "table" then
 			if p.phase ~= nil then
+				local was = phase
 				phase = tostring(p.phase)
+				if phase ~= was and (phase == "lobby" or phase == "spawn") then
+					bought = {}
+				end
 			end
 			-- THE DURABLE HALF, and the reason the first version of this gate never
 			-- opened. `init` is sent once at round start and this file finishes its
@@ -1055,6 +1242,9 @@ StateRE.OnClientEvent:Connect(function(kind, payload)
 			-- the two are read in separate branches.
 			if p.tutorial ~= nil then
 				lessonLive = p.tutorial == true
+				if lessonLive then
+					tutorialRound = true
+				end
 			end
 		end
 	elseif kind == "win" then
@@ -1062,6 +1252,41 @@ StateRE.OnClientEvent:Connect(function(kind, payload)
 	else
 		return
 	end
+	refresh()
+end)
+
+-- A BUY MOVES THE STICKER ON. The prompt closing with `isPurchased` is only a
+-- UI signal -- the grant is the server's, off the receipt -- but it is exactly
+-- the moment the owner wants the next rung up. Any live rung counts, whether
+-- it was bought off this sticker or off the store page.
+MarketplaceService.PromptProductPurchaseFinished:Connect(function(userId, productId, isPurchased)
+	if not isPurchased or userId ~= player.UserId then
+		return
+	end
+	for key, entry in liveKeys do
+		if entry.id == productId then
+			bought[key] = true
+			refresh()
+			return
+		end
+	end
+end)
+
+-- THE RAIL, found the way PlusTabClient finds it, and in a thread of its own so
+-- a HUD that never builds one costs the Pro Pack and nothing else.
+task.spawn(function()
+	local screen = playerGui:WaitForChild("Conquest", 60)
+	local rail = screen and screen:WaitForChild("Rail", 60)
+	if rail == nil or not rail:IsA("GuiObject") then
+		warn("[TutorialDeal] the HUD's rail (Conquest.Rail) never appeared; the Pro Pack is not offered.")
+		return
+	end
+	local r = rail :: GuiObject
+	railUp = r.Visible
+	r:GetPropertyChangedSignal("Visible"):Connect(function()
+		railUp = r.Visible
+		refresh()
+	end)
 	refresh()
 end)
 

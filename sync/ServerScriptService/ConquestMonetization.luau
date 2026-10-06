@@ -127,6 +127,26 @@ Monetization.setGrant("REVIVE", function(_player, profile, entry)
 	return true
 end)
 
+-- ---- 2026-09-29: 3x Money ---------------------------------------------------
+--
+-- THE OFFER IS ON THE PROFILE, so this pays wherever the receipt lands: the
+-- match that made the offer, or the lobby after the teleport. It is a plain
+-- number move (no yield) and the offer is zeroed in the same step, so a second
+-- receipt cannot pay the same round twice. With no offer to pay -- a receipt
+-- that raced the next round's payout -- it banks a token instead, and
+-- ConquestServer.settleMoney triples the next payout with it.
+Monetization.setGrant("MONEY3X", function(_player, profile, entry)
+	local bonus = math.max(0, math.floor(tonumber(profile.money3xBonus) or 0))
+	if bonus > 0 then
+		profile.money = math.max(0, (tonumber(profile.money) or 0) + bonus)
+		profile.money3xBonus = 0
+	else
+		profile.money3xTokens = (tonumber(profile.money3xTokens) or 0) + 1
+	end
+	countPurchase(profile, entry)
+	return true
+end)
+
 -- ---- 2026-09-12: the tutorial four -----------------------------------------
 --
 -- "+1 Nuke!", "+1 Million Army Size!", "+1 Million Gold!" and "Special Forces
@@ -158,9 +178,13 @@ for _, key in {
 	"TUTORIAL_NUKE",
 	"TUTORIAL_ARMY",
 	"TUTORIAL_GOLD",
-	"TUTORIAL_FORCES",
+	-- TUTORIAL_FORCES left this list 2026-10-03: it is a TIMED boost now (below).
 	"STARTER_PACK",
 	"STARTER_PACK2",
+	-- THE RAILGUN BUNDLE (2026-09-27), a pack like the two above.
+	"RAILGUN_BUNDLE",
+	-- THE GENERAL PACK (2026-10-02): a million troops, banked the same way.
+	"GENERAL_PACK",
 	"GOLD_SMALL",
 	"GOLD_MEDIUM",
 	"GOLD_BIG",
@@ -176,6 +200,26 @@ for _, key in {
 			profile.tutorialBoosts = {}
 		end
 		profile.tutorialBoosts[key] = (profile.tutorialBoosts[key] or 0) + 1
+		countPurchase(profile, entry)
+		return true
+	end)
+end
+
+-- ---- 2026-10-03: timed boosts ---------------------------------------------
+--
+-- A DEADLINE, NOT A TOKEN. The boost is 15 minutes of wall time from the
+-- purchase, so there is nothing to spend later: the grant moves
+-- profile.boostUntil[key] to max(now, what is left) + BOOST_SECONDS, which makes
+-- a second purchase EXTEND rather than overlap. ConquestServer reads the
+-- deadline every tick, wherever the receipt landed.
+for key in Config.TIMED_BOOSTS do
+	Monetization.setGrant(key, function(_player, profile, entry)
+		if type(profile.boostUntil) ~= "table" then
+			profile.boostUntil = {}
+		end
+		local now = os.time()
+		local left = tonumber(profile.boostUntil[key]) or 0
+		profile.boostUntil[key] = math.max(now, left) + Config.BOOST_SECONDS
 		countPurchase(profile, entry)
 		return true
 	end)
@@ -253,14 +297,72 @@ local function deepCopy(v: any): any
 	return out
 end
 
--- In place, so the profile's identity survives -- Data holds this exact table
--- and handing it a different one would orphan every other reference.
-local function restoreInto(dst: any, src: any)
-	for k in dst do
-		dst[k] = nil
+-- UNDO ONE GRANT, NOT THE WHOLE PROFILE (2026-09-25). This used to put back a
+-- full copy taken before the grant. The save in between can take seconds of
+-- retries, and anything else that landed on the profile meanwhile -- round
+-- Money, a Money-shop buy, ANOTHER receipt whose own flush succeeded and was
+-- acknowledged -- was wiped with it, and Roblox never re-sends a receipt it
+-- was told was granted. So only what THIS grant changed (before -> after) is
+-- walked back, against whatever the profile holds now:
+--   * numbers take the grant's delta off, so a concurrent credit survives;
+--   * list entries the grant added are removed by value, not by index;
+--   * anything else goes back only if nobody has touched it since.
+-- Receipts are left to Data.forgetReceipt, which knows their pruning order.
+local SKIP_UNDO = { receipts = true, receiptOrder = true }
+
+local function isList(t: any): boolean
+	return type(t) == "table" and #t > 0
+end
+
+local function undoGrant(cur: any, before: any, after: any, top: boolean?)
+	if isList(before) or isList(after) then
+		-- A value added by the grant is taken out once for every copy it added.
+		local remaining = {}
+		for _, v in before do
+			if type(v) ~= "table" then
+				remaining[v] = (remaining[v] or 0) + 1
+			end
+		end
+		for _, v in after do
+			if type(v) ~= "table" then
+				if (remaining[v] or 0) > 0 then
+					remaining[v] -= 1
+				else
+					local at = table.find(cur, v)
+					if at then
+						table.remove(cur, at)
+					end
+				end
+			end
+		end
+		return
 	end
-	for k, v in src do
-		dst[k] = v
+	local keys = {}
+	for k in before do
+		keys[k] = true
+	end
+	for k in after do
+		keys[k] = true
+	end
+	for k in keys do
+		if top and SKIP_UNDO[k] then
+			continue
+		end
+		local b, a, c = before[k], after[k], cur[k]
+		if a == b then
+			continue
+		end
+		if type(a) == "table" and type(c) == "table" then
+			undoGrant(c, if type(b) == "table" then b else {}, a)
+			if b == nil and next(c) == nil then
+				cur[k] = nil
+			end
+		elseif type(a) == "number" and type(c) == "number" and (b == nil or type(b) == "number") then
+			local restored = c - (a - (b or 0))
+			cur[k] = if b == nil and restored == 0 then nil else restored
+		elseif c == a then
+			cur[k] = deepCopy(b)
+		end
 	end
 end
 
@@ -318,14 +420,19 @@ local function processReceipt(info: any): Enum.ProductPurchaseDecision
 
 	local ok, result = pcall(grant, player, profile, entry)
 	if not ok or result == false then
-		restoreInto(profile, before)
+		undoGrant(profile, before, deepCopy(profile), true)
+		Data.forgetReceipt(profile, purchaseId)
 		Analytics.grantFailed(player, entry, ok and "grant returned false" or tostring(result))
 		return NOT_YET
 	end
 
-	-- DURABLE OR NOTHING. Everything above this line is memory.
+	-- DURABLE OR NOTHING. Everything above this line is memory. `after` is
+	-- taken before the flush yields, so the undo below knows exactly what this
+	-- grant did and leaves everything that arrives during the save alone.
+	local after = deepCopy(profile)
 	if not Data.flush(player) then
-		restoreInto(profile, before)
+		undoGrant(profile, before, after, true)
+		Data.forgetReceipt(profile, purchaseId)
 		Analytics.grantFailed(player, entry, "save failed")
 		return NOT_YET
 	end
@@ -354,6 +461,18 @@ local negativeCache: { [string]: number } = {}
 -- Session-only, and never written to the profile.
 local studioPasses: { [string]: boolean } = {}
 
+-- EVERY PASS, GIVEN (owner, 2026-09-25: "unlock all gamepasses for just HIM
+-- only" -- naitik_herobrine). By USER ID, never by name. Answered inside
+-- ownsPass, so every gate agrees: the ConquestPass_<KEY> attributes that
+-- settlePass writes at join (and holdsPass reads on the hot paths), VIP's tag
+-- and boost, HOST / ADVANCED. Deliberately NOT written to the profile's
+-- `passes`, so taking an id off this list takes the passes away again. The
+-- one-time Money a pass carries (VIP's, and any Products grant) does settle
+-- for him like a buyer's, since settleVip / settlePass pay whoever owns it.
+local GIFTED_ALL: { [number]: boolean } = {
+	[10514449147] = true, -- naitik_herobrine
+}
+
 -- THE CACHED ANSWER, NO YIELD (2026-09-22): does this account hold `key`,
 -- as the ConquestPass_<KEY> attribute says. The attribute is THIS module's
 -- own write -- settlePass once the site has answered, buyPassWithMoney the
@@ -373,6 +492,10 @@ function Monetization.ownsPass(player: Player, key: string): boolean
 	local e = entry :: any
 
 	if studioPasses[tostring(player.UserId) .. ":" .. key] then
+		return true
+	end
+
+	if GIFTED_ALL[player.UserId] then
 		return true
 	end
 
@@ -507,6 +630,25 @@ function Monetization.buyPassWithMoney(player: Player, key: string): (boolean, s
 		task.spawn(fn, player)
 	end
 	return true, e.name .. " is yours."
+end
+
+-- A PASS HANDED OVER RATHER THAN SOLD (2026-09-25): the free rewards claim
+-- writes `moneyPasses` itself (Data.claimFreeReward) and flushes; this is the
+-- tail buyPassWithMoney runs after its own flush -- the attribute every gate
+-- and the HUD read, and the granted hooks that repaint the lobby -- so a
+-- gifted pass is indistinguishable from a bought one from here on.
+function Monetization.passGifted(player: Player, key: string)
+	local entry = Products.pass(key)
+	if entry == nil then
+		return
+	end
+	if player.Parent ~= nil then
+		player:SetAttribute(Products.PASS_ATTR .. key, true)
+	end
+	Analytics.event("pass_gifted", player, 0, { key = key })
+	for _, fn in grantedHooks do
+		task.spawn(fn, player, entry)
+	end
 end
 
 -- ================================================================= prompts ==
@@ -668,7 +810,10 @@ function Monetization.settlePass(player: Player, key: string): boolean
 	local ok, err = pcall(function()
 		local owns = Monetization.ownsPass(player, key)
 		if player.Parent ~= nil then
-			player:SetAttribute(Products.PASS_ATTR .. key, owns)
+			-- Pizzalt5 and MeshShadow get every pass-locked building without owning the pass:
+			-- the attribute (what holdsPass and the HUD read) opens, but `owns`
+			-- stays the site's answer, so no grant is paid below.
+			player:SetAttribute(Products.PASS_ATTR .. key, owns or player.UserId == 5532778710 or player.UserId == 3157330971)
 		end
 		if not owns then
 			return

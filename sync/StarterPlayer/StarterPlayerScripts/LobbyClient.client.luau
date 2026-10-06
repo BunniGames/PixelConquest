@@ -55,6 +55,20 @@ page.onPatterns = function()
 	shop:open()
 end
 
+-- RANKED (2026-10-05). Built in the background: its remote is made by the
+-- RankedLobby server script, and the page must never wait on it. Pressing
+-- FIND MATCH first takes the player off any board card, so a ranked match and
+-- a card can never both teleport them.
+local RankedUI = require(Shared.RankedUI)
+task.spawn(function()
+	local ranked = RankedUI.new(screen, function()
+		LobbyIntentRE:FireServer("leave")
+	end)
+	page.onRanked = function()
+		ranked:open()
+	end
+end)
+
 -- ------------------------------------------------------------- rewards ---
 --
 -- NOTHING IS CHECKED HERE, and that is the design rather than an omission.
@@ -75,8 +89,10 @@ end
 
 -- WHAT THE INVITE PILL OPENS. PromptGameInvite is the one social action
 -- Roblox gives an in-experience dialog for -- there is no equivalent for a
--- like, a favourite or a community join (checked against the live API dump:
--- no Prompt* member for any of them on any service).
+-- like or a favourite (checked against the live API dump: no Prompt* member
+-- for either on any service). A COMMUNITY JOIN does have one now --
+-- GroupService:PromptJoinAsync, confirmed in Studio 2026-10-02 -- and is used
+-- by the "community" message below, not by this sheet.
 --
 -- OPENING IT IS THE WHOLE GATE, and that is a TRUST SYSTEM by choice (owner,
 -- 2026-09-17: "allow players to claim after they open the invite friend api.
@@ -410,6 +426,55 @@ task.spawn(function()
 	end)
 end)
 
+-- THE JOIN-THE-COMMUNITY DIALOG. PromptJoinAsync is client-only and yields
+-- until the player answers; pcall'd because the prompt is unavailable on some
+-- accounts, and a refusal there is not an error. Returns what came back, for
+-- /testcommunity to print.
+local function promptCommunity(groupId: number): string
+	local ok, status = pcall(function()
+		return game:GetService("GroupService"):PromptJoinAsync(groupId)
+	end)
+	return if ok then tostring(status) else "failed: " .. tostring(status)
+end
+
+-- /testcommunity (owner-only, or anyone in Studio): the dialog on demand, with
+-- none of the server's gates, and the outcome printed into chat. A MEMBER may
+-- see no dialog at all -- the answer is then AlreadyMember -- so test it on an
+-- account that is not in the community.
+do
+	local TextChatService = game:GetService("TextChatService")
+	task.spawn(function()
+		local cmd = TextChatService:WaitForChild("TestCommunityCommand", 30) :: TextChatCommand?
+		if not cmd then
+			return
+		end
+		cmd.Triggered:Connect(function(_source, _text)
+			local channels = TextChatService:FindFirstChild("TextChannels")
+			local ch = channels and (channels:FindFirstChild("RBXGeneral") or channels:FindFirstChildWhichIsA("TextChannel")) :: TextChannel?
+			local function say(line: string)
+				print("[testcommunity] " .. line)
+				if ch then
+					ch:DisplaySystemMessage('<font color="#FF9A6B">' .. line .. "</font>")
+				end
+			end
+			local owner = game.CreatorType == Enum.CreatorType.User and player.UserId == game.CreatorId
+			if not (owner or RunService:IsStudio()) then
+				say("/testcommunity is for the owner only.")
+				return
+			end
+			local groupId = tonumber(cmd:GetAttribute("GroupId"))
+			if not groupId then
+				say("no community id on the command -- is MatchmakerServer running?")
+				return
+			end
+			say("prompting community " .. groupId .. "...")
+			task.spawn(function()
+				say("result: " .. promptCommunity(groupId))
+			end)
+		end)
+	end)
+end
+
 -- The same remote also carries "wait"/"go", which belong to MatchIntro in a
 -- match server. Ignoring anything unrecognised is what lets one channel serve
 -- both roles.
@@ -473,6 +538,18 @@ LobbyRE.OnClientEvent:Connect(function(kind, a, b)
 			if type(a.say) == "string" and a.say ~= "" then
 				page:rewardSay(a.say)
 			end
+		end
+	elseif kind == "community" then
+		-- The one-time JOIN THE COMMUNITY dialog, on this account's first walk
+		-- back from a round (MatchmakerServer, promptCommunity, which has
+		-- already checked membership and latched the ask). PromptJoinAsync is
+		-- client-only and yields until the player answers, so it is spawned --
+		-- and held back a few seconds, so the page has drawn under it and the
+		-- first thing seen on arrival is not a modal. pcall'd: the prompt is
+		-- unavailable on some accounts, and a refusal there is not an error.
+		local groupId = tonumber(a)
+		if groupId then
+			task.delay(3, promptCommunity, groupId)
 		end
 	elseif kind == "passes" then
 		-- Which room dials this account's passes open: 0, HOST or ADVANCED.

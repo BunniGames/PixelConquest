@@ -163,6 +163,15 @@ local function defaultProfile(): any
 		-- profile written before they existed.
 		money2x = false,
 		reviveTokens = 0,
+		-- 3x MONEY (2026-09-29). `money3xBonus` is the round-end OFFER: the
+		-- extra Money a MONEY3X receipt pays (twice what the last round paid),
+		-- written by ConquestServer when a round is won and zeroed by the grant.
+		-- On the profile rather than in the match server's memory because the
+		-- receipt can land on the lobby after the teleport. `money3xTokens` is
+		-- a purchase that found no offer to pay -- it triples the next round's
+		-- payout instead, so a paid receipt is never lost.
+		money3xBonus = 0,
+		money3xTokens = 0,
 		-- VIP (2026-09-15). NOT a record of owning the pass -- `passes` above is
 		-- that, written by Monetization.ownsPass off the site's own answer --
 		-- but of the one-time grants that come WITH it having been paid: the
@@ -200,6 +209,10 @@ local function defaultProfile(): any
 		-- is the right starting state for the same reason `patterns` is one:
 		-- owning none of something is not a row.
 		tutorialBoosts = {},
+		-- TIMED BOOSTS (2026-10-03): product key -> os.time() the boost runs
+		-- out at. Written by the grant in ConquestMonetization, read by
+		-- ConquestServer.timedBoosts. A past deadline is the same as none.
+		boostUntil = {},
 		-- HAS THIS ACCOUNT BEEN THROUGH THE TUTORIAL. Asked in exactly one
 		-- place and for one purpose: a lobby server puts a player who has
 		-- never been here into the lesson instead of onto the page. Set the
@@ -210,12 +223,24 @@ local function defaultProfile(): any
 		-- is what a brand-new profile gets; see `migrate` for why a profile
 		-- that already existed gets `true`.
 		tutorialSeen = false,
+		-- HAS THIS ACCOUNT BEEN SHOWN THE JOIN-THE-COMMUNITY PROMPT (2026-10-02).
+		-- Once per account, on its first walk back from a match to the page
+		-- (MatchmakerServer, promptCommunity). `false` is also the right answer
+		-- for every profile that predates it -- owner: existing players get the
+		-- one prompt too -- so the additive loop in `migrate` is all it needs.
+		communityPrompted = false,
 		-- Lifetime. The last four are what the funnels bank here: seconds
 		-- played (summed per SERVER, so a lobby wait and the round it led to
 		-- both count), visits that actually ended rather than teleported,
 		-- tutorials finished, and when they were last seen -- which is the one
 		-- field that makes "is this a returning player" answerable from inside
 		-- the game instead of only on the dashboard.
+		-- RANKED (2026-10-05): the one shared rating across 1v1/2v2/4v4, the
+		-- rank it maps to (an index into Ranked.LADDER, stored so other
+		-- features can read it), and `best`, the highest rank ever reached --
+		-- the latch that pays each rank's reward once. Kept in step by
+		-- Ranked.ensure / RankedMatch.
+		ranked = { rating = 1000, rank = 1, best = 1, games = 0, wins = 0, losses = 0 },
 		stats = {
 			matches = 0,
 			wins = 0,
@@ -396,6 +421,10 @@ local function tryAcquire(ds: DataStore, key: string): (boolean, any, boolean)
 	return ok, res, blocked
 end
 
+-- Defined with the save code below; declared here so a load that has to hand
+-- its lock straight back can reach it.
+local writeProfile: (DataStore, string, any, boolean, Player?) -> boolean
+
 -- Loads `player`, taking the session lock. Yields. Safe to call twice: the
 -- second call returns the already-loaded profile rather than re-reading.
 function Data.load(player: Player): any
@@ -445,6 +474,14 @@ function Data.load(player: Player): any
 		end
 		local ok, res, blocked = tryAcquire(ds, key)
 		if ok and not blocked then
+			-- LEFT WHILE THE LOCK WAS BEING TAKEN. `finish` would drop the
+			-- profile, and nothing would ever release the lock we just wrote:
+			-- their next server would wait out LOCK_TTL. Hand it straight back.
+			if player.Parent == nil then
+				loading[player] = nil
+				task.spawn(writeProfile, ds, key, migrate(res), true)
+				return nil
+			end
 			return finish(migrate(res))
 		end
 		if not ok then
@@ -508,10 +545,22 @@ end
 
 -- =================================================================== save ==
 
+-- ONCE A PLAYER IS LEAVING, NO WRITE MAY TAKE THE LOCK BACK (2026-09-25).
+-- Data.release yields inside its save while the profile is still live, and
+-- PlayerRemoving handlers are not guaranteed to run in registration order:
+-- the leave-time Money settlement, a receipt, a redeem can all flush during or
+-- after the release, and every one of them used to write `lock = this server`
+-- back -- so the player's next server (the lobby, straight after LEAVE) sat
+-- out LOCK_TTL before it could load them. Keyed by the Player object, which a
+-- rejoin replaces, and decided INSIDE the transform, so a flush that was
+-- already queued when the release began still lands unlocked. Its data is
+-- still written: that settlement is Money the player earned.
+local releasing: { [Player]: boolean } = {}
+
 -- The lock is re-checked INSIDE the transform: if this server lost the lock
 -- while the round was running (a long hang, then a steal by the server the
 -- player teleported to) then this write is stale and must not land.
-local function writeProfile(ds: DataStore, key: string, p: any, release: boolean): boolean
+function writeProfile(ds: DataStore, key: string, p: any, release: boolean, player: Player?): boolean
 	local abandoned = false
 	local ok, err = attempt(Enum.DataStoreRequestType.UpdateAsync, function()
 		abandoned = false
@@ -521,7 +570,8 @@ local function writeProfile(ds: DataStore, key: string, p: any, release: boolean
 				return nil
 			end
 			local copy = table.clone(p)
-			copy.lock = if release then nil else { job = JOB, t = os.time() }
+			local drop = release or (player ~= nil and releasing[player] == true)
+			copy.lock = if drop then nil else { job = JOB, t = os.time() }
 			return copy
 		end)
 	end)
@@ -555,7 +605,7 @@ function Data.save(player: Player, release: boolean?): boolean
 	if ds == nil then
 		return memoryOnly
 	end
-	local wrote = writeProfile(ds, keyFor(player.UserId), p, release == true)
+	local wrote = writeProfile(ds, keyFor(player.UserId), p, release == true, player)
 	if wrote then
 		dirty[player] = nil
 	end
@@ -570,6 +620,12 @@ function Data.flush(player: Player): boolean
 end
 
 function Data.release(player: Player)
+	-- Set BEFORE the save yields; see `releasing`. Cleared well after any
+	-- straggling flush could still be queued, only so the table does not grow.
+	releasing[player] = true
+	task.delay(120, function()
+		releasing[player] = nil
+	end)
 	local p = profiles[player]
 	if p ~= nil then
 		Data.save(player, true)
@@ -702,6 +758,35 @@ end
 function Data.hasMoney2x(player: Player): boolean
 	local p = profiles[player]
 	return p ~= nil and p.money2x == true
+end
+
+-- THE 3x MONEY OFFER (2026-09-29): what a MONEY3X receipt would pay right now.
+-- Set at round end, zeroed at the next payout and by the grant. Not flushed
+-- here -- the release on PlayerRemoving saves it, which is the only way it
+-- reaches the lobby the receipt might land on.
+function Data.setMoney3xOffer(player: Player, bonus: number)
+	local p = profiles[player]
+	if p == nil then
+		return
+	end
+	p.money3xBonus = math.max(0, math.floor(tonumber(bonus) or 0))
+	dirty[player] = true
+end
+
+function Data.money3xOffer(player: Player): number
+	local p = profiles[player]
+	return p ~= nil and math.max(0, math.floor(tonumber(p.money3xBonus) or 0)) or 0
+end
+
+-- Spends one MONEY3X bought with no offer to pay. True when there was one.
+function Data.takeMoney3xToken(player: Player): boolean
+	local p = profiles[player]
+	if p == nil or (tonumber(p.money3xTokens) or 0) <= 0 then
+		return false
+	end
+	p.money3xTokens -= 1
+	dirty[player] = true
+	return true
 end
 
 -- ====================================================================== VIP ==
@@ -895,44 +980,46 @@ end
 -- fails: a grant that is not durable is a grant that did not happen, and here
 -- the latch would survive in memory and refuse to pay it again.
 --
--- IT DOES NOT EQUIP THE SKIN. buyPattern equips what it sells because a
--- purchase that does not put the thing on reads as a failure; this is a
--- reward taken from a sheet in the lobby, and silently replacing whatever
--- somebody chose to wear is not what they asked for.
-function Data.claimFreeReward(player: Player, money: number, patternKey: string): boolean
+-- THE PASS LANDS AS IF IT WERE BOUGHT (owner, 2026-09-25: "instead of
+-- chevrons, give away the mega nuke access as if they bought it"). It is
+-- written to `moneyPasses`, the game's own record of a sale, which
+-- Monetization.ownsPass reads before the site -- so from here on every gate
+-- the pass opens opens for this account exactly as for a buyer.
+--
+-- The second return is whether THIS claim wrote the pass. An account that
+-- already held it (bought either way) gets the Money alone, and the rollback
+-- must not take away a pass it did not give.
+function Data.claimFreeReward(player: Player, money: number, passKey: string): (boolean, boolean)
 	local p = profiles[player]
 	if p == nil or p.freeReward == true then
-		return false
+		return false, false
 	end
 	p.freeReward = true
 	p.money = math.max(0, (tonumber(p.money) or 0) + math.floor(tonumber(money) or 0))
-	if type(p.patterns) ~= "table" then
-		p.patterns = {}
+	if type(p.moneyPasses) ~= "table" then
+		p.moneyPasses = {}
 	end
-	if patternKey ~= "" then
-		p.patterns[patternKey] = true
+	local held = p.moneyPasses[passKey] == true
+		or (type(p.passes) == "table" and p.passes[passKey] == true)
+	local granted = passKey ~= "" and not held
+	if granted then
+		p.moneyPasses[passKey] = true
 	end
 	dirty[player] = true
-	return true
+	return true, granted
 end
 
 -- The rollback half. A grant applied in memory whose save then failed must
 -- leave no trace, or the next press sees the latch and never pays.
-function Data.unclaimFreeReward(player: Player, money: number, patternKey: string)
+function Data.unclaimFreeReward(player: Player, money: number, passKey: string, granted: boolean)
 	local p = profiles[player]
 	if p == nil then
 		return
 	end
 	p.freeReward = false
 	p.money = math.max(0, (tonumber(p.money) or 0) - math.floor(tonumber(money) or 0))
-	if type(p.patterns) == "table" and patternKey ~= "" then
-		p.patterns[patternKey] = nil
-	end
-	-- ...and if they put it on in the meantime, take it back off: wearing a
-	-- skin the profile no longer records is the one state patternKey refuses
-	-- to return anyway.
-	if p.pattern == patternKey then
-		p.pattern = Patterns.DEFAULT_KEY
+	if granted and type(p.moneyPasses) == "table" then
+		p.moneyPasses[passKey] = nil
 	end
 	dirty[player] = true
 end
@@ -1234,6 +1321,22 @@ end
 function Data.tutorialSeen(player: Player): boolean
 	local p = profiles[player]
 	return p == nil or p.tutorialSeen == true
+end
+
+-- ======================================================= community prompt ==
+--
+-- LATCHED, NEVER CLEARED, and the same shape as markTutorialSeen: true only
+-- when the flag actually MOVED, so the caller that gets true is the one that
+-- shows the prompt. A player with no profile gets false -- a session that
+-- cannot remember asking must not ask, or a failed load asks on every round.
+function Data.markCommunityPrompted(player: Player): boolean
+	local p = profiles[player]
+	if p == nil or p.communityPrompted == true then
+		return false
+	end
+	p.communityPrompted = true
+	dirty[player] = true
+	return true
 end
 
 -- ================================================================ install ==

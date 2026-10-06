@@ -69,6 +69,11 @@ local function sceneGui(): ScreenGui
 		g = Instance.new("ScreenGui")
 		g.Name = SCENE_GUI
 		g.IgnoreGuiInset = true
+		-- Matches "Conquest" (HUD.new): the viewport is offset out over the
+		-- safe-area insets of THAT rect, so it has to sit in the same one.
+		g.ScreenInsets = Enum.ScreenInsets.DeviceSafeInsets
+		g.ClipToDeviceSafeArea = false
+		g.SafeAreaCompatibility = Enum.SafeAreaCompatibility.None
 		g.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 		g.ResetOnSpawn = false
 		g.DisplayOrder = 2147483647
@@ -246,5 +251,28 @@ local function bind(name: string, alias: string, fn: () -> ())
 	end
 end
 
-bind("SceneCommand", "/scene", enter)
-bind("SceneOnCommand", "/scene1", leave)
+-- WHO MAY USE IT (owner, 2026-09-25: "give naitik_herobrine access to /scene
+-- and /scene1"). It was open to every player; it is now the game's owner,
+-- the ids below, and anyone in Studio. By USER ID, never by name -- a name can
+-- be changed and then taken by somebody else. Everyone else simply gets no
+-- binding: the TextChatCommands saved in the place still swallow the text, so
+-- a stranger typing /scene sees nothing happen and nothing is posted to chat.
+-- (Client-only by design: this only ever changes the typer's own screen, so
+-- there is nothing a bypass could do to anybody else.)
+local ALLOWED: { [number]: boolean } = {
+	[10514449147] = true, -- naitik_herobrine
+	[5532778710] = true, -- Pizzalt5
+	[3157330971] = true, -- MeshShadow
+}
+
+local function allowed(): boolean
+	if RunService:IsStudio() or ALLOWED[player.UserId] then
+		return true
+	end
+	return game.CreatorType == Enum.CreatorType.User and player.UserId == game.CreatorId
+end
+
+if allowed() then
+	bind("SceneCommand", "/scene", enter)
+	bind("SceneOnCommand", "/scene1", leave)
+end

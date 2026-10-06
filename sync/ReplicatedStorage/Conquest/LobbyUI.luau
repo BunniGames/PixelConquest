@@ -19,6 +19,7 @@
 
 local Players = game:GetService("Players")
 local TweenService = game:GetService("TweenService")
+local RunService = game:GetService("RunService")
 local AssetService = game:GetService("AssetService")
 
 local Gamepad = require(script.Parent.Gamepad)
@@ -29,6 +30,9 @@ local Sfx = require(script.Parent.Sfx)
 -- and its swatch. Named off the catalogue rather than spelled out here, so
 -- the sheet cannot promise something the grant does not hand over.
 local Patterns = require(script.Parent.Patterns)
+-- The free-rewards plate's art: the Mega Nuke it now gives away.
+local Icons = require(script.Parent.Icons)
+local MoneyNote = require(script.Parent.MoneyNote)
 
 local LobbyUI = {}
 LobbyUI.__index = LobbyUI
@@ -109,6 +113,13 @@ local MAP_ART = {
 	-- northern ocean, the southern highlands under it, and Tharsis with
 	-- Olympus Mons beside it right of centre.
 	mars = "rbxassetid://132092241836422",
+	-- UK and India cards (2026-10-02): card.py -> out/card/<Name>Map.png,
+	-- uploaded as decals 108997615574920 / 122711528418210. Ireland, the
+	-- continent, Tibet and the rest sink into the navy.
+	uk = "rbxassetid://81766898965216",
+	india = "rbxassetid://131804601444192",
+	-- North America card (2026-10-05): card.py -> out/card/NorthAmericaMap.png.
+	namerica = "rbxassetid://87993577785810",
 }
 
 local INK = Color3.fromRGB(234, 240, 250)
@@ -273,7 +284,9 @@ local SMALL_H = (BLOCK_H - SMALL_GAP * 2 - DOOR_H) / 2
 -- side and a different colour, CREATE and JOIN are adjacent and read as the
 -- pair they are, and the shop is plainly not part of that pair.
 local BTN_GAP = 32
-local BTN_N = 3
+-- FOUR since 2026-10-05: RANKED joined the row, last and in violet (the top
+-- rank's metal) -- a game door like CREATE/JOIN, but not part of that pair.
+local BTN_N = 4
 local BTN_W = (CONTENT_W - BTN_GAP * (BTN_N - 1)) / BTN_N
 
 -- Card internals are in ABSOLUTE authored pixels, not fractions of the card:
@@ -281,6 +294,9 @@ local BTN_W = (CONTENT_W - BTN_GAP * (BTN_N - 1)) / BTN_N
 -- small ones, and a fraction would scale it with the card.
 local CAP_H = 78
 local PILL_H = 26
+-- ...EXCEPT ON THE BIG CARD (2026-10-02), whose caption band and everything in
+-- it is this much bigger -- see buildCard's `k`.
+local CAP_BIG = 1.55
 
 -- HOW LONG AN OPTIMISTIC PAINT OUTLIVES THE PRESS THAT MADE IT. The server
 -- pushes the board the instant a join lands now, so the truth normally
@@ -329,6 +345,128 @@ end
 -- back is replaced rather than fought.
 local function tween(inst: Instance, info: TweenInfo, props: { [string]: any })
 	TweenService:Create(inst, info, props):Play()
+end
+
+-- THE MAPS BREATHE (2026-10-02, owner: "for all the maps in the lobby, can you
+-- give them tweens ... so that they just move a bit", then "make it so that
+-- the 3 tweens together look good together", then of a version where each map
+-- panned its own way: "it just doesnt look cohesive, it looks like its moving
+-- without purpose").
+--
+-- SO THERE IS ONE MOVE, AND IT HAS A TARGET. Every picture pushes slowly in
+-- toward the heart of its own map, holds, and eases back out to the whole
+-- view -- all of them on one clock, so the three cards breathe together. What
+-- differs per map is only WHERE it pushes: Breathe.FOCUS, the centre of the land
+-- in that render, MEASURED in Studio (2026-10-02: every pixel that is not the
+-- render's dominant sea colour, averaged), not picked by eye. A map with no
+-- entry pushes at the middle; a card with no art sits still.
+--
+-- IT MOVES THE PICTURE INSIDE THE FRAME, NOT THE FRAME. Growing the ImageLabel
+-- would push its rounded corners outside the card, and a card clips to its
+-- rectangle, not its rounding (see buildCard's roundOff note). So the frame
+-- stays put and ImageRectOffset / ImageRectSize close a window in on the
+-- render; Crop fills the frame from that window exactly as it did from the
+-- whole picture. Every card render is ART_PX (all sixteen checked in Studio,
+-- 2026-10-02) -- a map rendered at another size needs its own.
+--
+-- ONE CLOCK, read off os.clock() rather than tweens started per card, so a
+-- card whose map changes mid-breath rejoins the others in step instead of
+-- starting its own.
+-- ONE TABLE, NOT A DOZEN LOCALS: this module sits at Luau's 200-local limit
+-- for one function body, and the main chunk counts as one.
+local Breathe = {
+	ART_PX = Vector2.new(880, 550),
+	ZOOM = 0.88, -- share of the picture in view at the deepest point
+	MOVE = 9, -- seconds to push in, and again to ease out
+	HOLD = 2.5, -- seconds held at each end
+	FOCUS = {
+		us = Vector2.new(0.46, 0.46),
+		europe = Vector2.new(0.61, 0.46),
+		china = Vector2.new(0.49, 0.52),
+		medit = Vector2.new(0.5, 0.52),
+		tokyo = Vector2.new(0.38, 0.4),
+		istanbul = Vector2.new(0.52, 0.55),
+		venice = Vector2.new(0.38, 0.45),
+		pacific = Vector2.new(0.49, 0.36),
+		world = Vector2.new(0.53, 0.4),
+		nyc = Vector2.new(0.55, 0.51),
+		japan = Vector2.new(0.5, 0.55),
+		korea = Vector2.new(0.5, 0.48),
+		africa = Vector2.new(0.51, 0.44),
+		philippines = Vector2.new(0.52, 0.52),
+		eurasia = Vector2.new(0.5, 0.48),
+		mars = Vector2.new(0.51, 0.63),
+		uk = Vector2.new(0.5, 0.5),
+		india = Vector2.new(0.48, 0.48),
+		namerica = Vector2.new(0.47, 0.41),
+	} :: { [string]: Vector2 },
+	-- MAP_ART read backwards: picture id -> map id.
+	MAP_OF = {} :: { [string]: string },
+	-- Every breathing picture and its pushed-in window. Weak, so a card or row
+	-- that is destroyed takes its entry with it.
+	live = setmetatable({}, { __mode = "k" }) :: any,
+	loop = nil :: RBXScriptConnection?,
+}
+for map, id in MAP_ART do
+	Breathe.MAP_OF[id] = map
+end
+
+-- The pushed-in window for a focus: ZOOM of the picture, centred on the focus
+-- as far as the picture's edges allow.
+function Breathe.rect(focus: Vector2): (Vector2, Vector2)
+	local size = Breathe.ART_PX * Breathe.ZOOM
+	local slack = Breathe.ART_PX - size
+	local offset = Breathe.ART_PX * focus - size / 2
+	return Vector2.new(math.clamp(offset.X, 0, slack.X), math.clamp(offset.Y, 0, slack.Y)), size
+end
+
+-- How far in the shared breath is: 0 = the whole picture, 1 = pushed in.
+-- Out-hold, ease in, in-hold, ease out, eased like a Sine tween.
+function Breathe.alpha(): number
+	local t = os.clock() % ((Breathe.MOVE + Breathe.HOLD) * 2)
+	if t < Breathe.HOLD then
+		return 0
+	end
+	t -= Breathe.HOLD
+	if t < Breathe.MOVE then
+		return (1 - math.cos(math.pi * t / Breathe.MOVE)) / 2
+	end
+	t -= Breathe.MOVE
+	if t < Breathe.HOLD then
+		return 1
+	end
+	t -= Breathe.HOLD
+	return (1 + math.cos(math.pi * t / Breathe.MOVE)) / 2
+end
+
+function Breathe.step()
+	local a = Breathe.alpha()
+	for art, w in Breathe.live do
+		if art.Parent == nil then
+			Breathe.live[art] = nil
+		else
+			art.ImageRectOffset = w.offset * a
+			art.ImageRectSize = Breathe.ART_PX:Lerp(w.size, a)
+		end
+	end
+end
+
+-- Points `art`'s breath at whatever picture it now shows. Called wherever a
+-- map picture is assigned.
+local function breathe(art: ImageLabel)
+	local map = Breathe.MAP_OF[art.Image]
+	if map == nil then
+		Breathe.live[art] = nil
+		art.ImageRectOffset = Vector2.zero
+		art.ImageRectSize = Vector2.zero
+		return
+	end
+	local offset, size = Breathe.rect(Breathe.FOCUS[map] or Vector2.new(0.5, 0.5))
+	Breathe.live[art] = { offset = offset, size = size }
+	if Breathe.loop == nil then
+		Breathe.loop = RunService.Heartbeat:Connect(Breathe.step)
+	end
+	Breathe.step()
 end
 
 -- `h` is the type size: the box is exactly one line tall and TextScaled fills
@@ -630,7 +768,11 @@ local function pillButton(
 	scrim.Parent = b
 	roundOff(scrim, 10)
 
-	local caption = label(b, "Caption", w, h, 0, (h - 20) / 2, w, 20, INK, Enum.TextXAlignment.Center, FONT_BOLD)
+	-- 20 on an ordinary pill, and a third of the height on a tall one
+	-- (2026-10-02): the bottom row's 76-tall buttons read as empty boxes with
+	-- a 20 caption, beside SEE ALL GAMES' larger word.
+	local th = math.max(20, math.floor(h * 0.3 + 0.5))
+	local caption = label(b, "Caption", w, h, 0, (h - th) / 2, w, th, INK, Enum.TextXAlignment.Center, FONT_BOLD)
 	caption.ZIndex = 3
 	setText(caption, text)
 
@@ -687,6 +829,77 @@ local function pillButton(
 	return b
 end
 
+-- A RAISED PILL (2026-10-02, owner: "make the button < > and clan tag button 3d
+-- and look more noticable", then "make the button fit in wiht the rest of the
+-- lobby ui"). It stays a pillButton in every way the page already is -- the
+-- kit scrim, the 1.6 edge, radius 10, the plain INK caption, the hover swell
+-- and the pop -- and is noticeable the way SHOP and FREE REWARDS already are:
+-- a deep fill with a bright edge of the same hue (`fill`, `edge`), instead of
+-- the dark panel every ordinary pill shares.
+--
+-- THE KIT'S DEPTH, NOT A NEW ONE. The only depth this page draws is the hard
+-- black drop under its display text (KIT_SHADOW), so the button stands on the
+-- same thing: a dark slab the face's own shape, dropped below it. The face
+-- sinks onto it while held. The slab is a SIBLING behind the face, not a child
+-- (a child always draws over its parent), so it mirrors the face's visibility
+-- and hover swell by hand. A field on LobbyUI rather than a local: this chunk
+-- is at Luau's 200-local limit.
+function LobbyUI.raise3D(b: ImageButton, fill: Color3, edge: Color3, textSize: number?)
+	local DEPTH = 0.1 -- the slab's drop, as a share of the face's height
+	b.BackgroundColor3 = fill
+	b.ZIndex = math.max(b.ZIndex, 2)
+	local stroke = b:FindFirstChildOfClass("UIStroke")
+	if stroke then
+		stroke.Color = edge
+	end
+
+	local caption = b:FindFirstChild("Caption") :: TextLabel?
+	if caption and textSize then
+		caption.Size = UDim2.fromScale(1, textSize)
+		caption.Position = UDim2.fromScale(0, (1 - textSize) / 2)
+		local cap = caption:FindFirstChildOfClass("UITextSizeConstraint")
+		if cap then
+			cap.MaxTextSize = 64
+		end
+	end
+
+	local slab = Instance.new("Frame")
+	slab.Name = b.Name .. "Lip"
+	slab.BackgroundColor3 = Color3.new(0, 0, 0)
+	slab.BackgroundTransparency = 0.35
+	slab.BorderSizePixel = 0
+	slab.AnchorPoint = b.AnchorPoint
+	slab.Size = b.Size
+	local rest = b.Position
+	local drop = UDim2.fromScale(0, b.Size.Y.Scale * DEPTH)
+	slab.Position = rest + drop
+	slab.ZIndex = b.ZIndex - 1
+	slab.Visible = b.Visible
+	slab.Parent = b.Parent
+	roundOff(slab, 10)
+
+	b:GetPropertyChangedSignal("Visible"):Connect(function()
+		slab.Visible = b.Visible
+	end)
+	local faceScale = b:FindFirstChildOfClass("UIScale")
+	if faceScale then
+		local slabScale = Instance.new("UIScale")
+		slabScale.Parent = slab
+		faceScale:GetPropertyChangedSignal("Scale"):Connect(function()
+			slabScale.Scale = faceScale.Scale
+		end)
+	end
+	-- THE PRESS SINKS THE FACE ONTO THE SLAB, and lets it back up.
+	b.MouseButton1Down:Connect(function()
+		tween(b, PRESS_IN, { Position = rest + drop })
+	end)
+	local function up()
+		tween(b, PRESS_OUT, { Position = rest })
+	end
+	b.MouseButton1Up:Connect(up)
+	b.MouseLeave:Connect(up)
+end
+
 
 -- ------------------------------------------------------------------ gift ---
 
@@ -706,6 +919,10 @@ local PIX_P: { [string]: { number } } = {
 	["y"] = { 232, 196, 110, 255 }, -- the page's own GOLD, lit
 	["o"] = { 186, 150, 74, 255 }, -- and in shade, which is what makes it a box
 	["r"] = { 214, 60, 66, 255 }, -- ribbon
+	-- The banknote (2026-10-02): FREE_FILL's deep green, GAIN, and a pale lift.
+	["d"] = { 28, 112, 62, 255 },
+	["g"] = { 111, 217, 138, 255 },
+	["l"] = { 206, 246, 214, 255 },
 }
 local GIFT_ART = {
 	"................",
@@ -930,6 +1147,17 @@ local CARD_R = 10
 -- not have to say and this one does.
 --
 -- Sized by the caller, because the block is one big card and two small ones.
+-- The outline under a card's caption text: dark, soft, thin. A field rather
+-- than a local -- this chunk is at Luau's 200-local limit.
+function LobbyUI.capStroke(t: TextLabel)
+	local s = Instance.new("UIStroke")
+	s.Color = Color3.fromRGB(4, 6, 12)
+	s.Thickness = 1.5
+	s.Transparency = 0.35
+	s.LineJoinMode = Enum.LineJoinMode.Round
+	s.Parent = t
+end
+
 local function buildCard(root: Frame, index: number, x: number, y: number, w: number, h: number): any
 	local slot = Matchmaker.SLOTS[index]
 
@@ -1032,7 +1260,16 @@ local function buildCard(root: Frame, index: number, x: number, y: number, w: nu
 	band.Name = "Band"
 	band.BackgroundColor3 = Color3.fromRGB(6, 9, 16)
 	band.BorderSizePixel = 0
-	place(band, w, h, 0, h - CAP_H, w, CAP_H)
+	-- THE BIG CARD'S CAPTION IS BIGGER (2026-10-02, owner: "make the text
+	-- formatting of the lobby look better"). Everything in the band -- map name,
+	-- mode line, pill, second line, and the band itself -- is authored at the
+	-- small cards' size and multiplied by `k`, which is 1 on the small cards and
+	-- CAP_BIG on the big one. The old rule (one size on every card, see CAP_H)
+	-- left the big card's title the same size as the small ones', so the page
+	-- had no headline.
+	local k = if index == 1 then CAP_BIG else 1
+	local capH = CAP_H * k
+	place(band, w, h, 0, h - capH, w, capH)
 	band.Parent = card
 	-- The band only touches the card's BOTTOM two corners, but rounding all
 	-- four costs nothing: its gradient is fully transparent at the top edge,
@@ -1049,8 +1286,13 @@ local function buildCard(root: Frame, index: number, x: number, y: number, w: nu
 
 	-- Map name big, mode small under it, both left-aligned against the band's
 	-- own left edge -- the reference's exact arrangement.
-	local mapName = label(card, "Map", w, h, 16, h - CAP_H + 22, w - 32, 26, INK, Enum.TextXAlignment.Left, FONT_BOLD)
-	local modeName = label(card, "Mode", w, h, 16, h - CAP_H + 54, w - 32, 14, INK_DIM, Enum.TextXAlignment.Left)
+	local mapName = label(card, "Map", w, h, 16 * k, h - capH + 18 * k, w - 32 * k, 26 * k, INK, Enum.TextXAlignment.Left, FONT_BOLD)
+	local modeName = label(card, "Mode", w, h, 16 * k, h - capH + 50 * k, w - 32 * k, 15 * k, INK_DIM, Enum.TextXAlignment.Left, FONT_BOLD)
+	-- A soft dark outline on the words that sit over the map art, so a light
+	-- coastline under a title never washes it out.
+	for _, t in { mapName, modeName } do
+		LobbyUI.capStroke(t)
+	end
 	setText(mapName, string.upper(slot.name))
 
 	-- THE HISTORICAL PILL (2026-09-11, owner: "when a player sees it in the
@@ -1059,9 +1301,18 @@ local function buildCard(root: Frame, index: number, x: number, y: number, w: nu
 	-- place and INSTEAD of it on a historical card -- the same word twice on
 	-- one card is the thing to avoid -- so the band still reads map, then mode.
 	-- Hidden on every other card; setBoard flips the two.
-	local modeChip = chip(card, "ModeChip", w, h, 16, h - CAP_H + 50, 116, 22, Color3.fromRGB(150, 206, 255), 0)
+	local modeChip = chip(card, "ModeChip", w, h, 16 * k, h - capH + 48 * k, 124 * k, 22 * k, Color3.fromRGB(150, 206, 255), 0)
 	modeChip.Visible = false
-	local modeChipText = label(modeChip, "ModeText", 116, 22, 0, 4, 116, 14, Color3.fromRGB(8, 12, 20), Enum.TextXAlignment.Center, FONT_BOLD)
+	local modeChipText = label(modeChip, "ModeText", 124, 22, 0, 4, 124, 14, Color3.fromRGB(8, 12, 20), Enum.TextXAlignment.Center, FONT_BOLD)
+
+	-- THE SECOND LINE (2026-10-02, owner: "call it Admin Abuse. And another line
+	-- below it. Chaos Mode"): a mode's SUBTITLE, under the pill. The band has no
+	-- room below the pill, so on a card that has one setBoard lifts the map name
+	-- and the pill by SUB_LIFT and the line takes the space they left.
+	local modeSub = label(card, "ModeSub", w, h, 16 * k, h - capH + 58 * k, w - 32 * k, 14 * k, MODE_PILL.special, Enum.TextXAlignment.Left, FONT_BOLD)
+	modeSub.Visible = false
+	LobbyUI.capStroke(modeSub)
+	local SUB_LIFT = 18 * k
 
 	-- Timer, top-right.
 	local clockChip = chip(card, "ClockChip", w, h, w - 104, 12, 92, PILL_H, ACCENT, 0)
@@ -1079,7 +1330,7 @@ local function buildCard(root: Frame, index: number, x: number, y: number, w: nu
 	-- directly under the timer chip at 12, which is the same corner. The floor
 	-- drops it clear of that; on the big card the maximum never binds and the
 	-- chip is exactly where it has always been.
-	local countY = math.max(h - CAP_H - 34, 44)
+	local countY = math.max(h - capH - 34, 44)
 	local countChip = chip(card, "CountChip", w, h, w - 108, countY, 96, 24, Color3.fromRGB(6, 9, 16), 0.12)
 	local countText = label(countChip, "Count", 96, 24, 0, 5, 96, 14, INK, Enum.TextXAlignment.Center, FONT_BOLD)
 
@@ -1121,6 +1372,10 @@ local function buildCard(root: Frame, index: number, x: number, y: number, w: nu
 		modeName = modeName,
 		modeChip = modeChip,
 		modeChipText = modeChipText,
+		modeSub = modeSub,
+		mapAt = mapName.Position,
+		chipAt = modeChip.Position,
+		subLift = UDim2.fromScale(0, SUB_LIFT / h),
 		clock = clock,
 		count = countText,
 		faces = faces,
@@ -1906,7 +2161,9 @@ local RW_LAND_PUNCH = TweenInfo.new(0.42, Enum.EasingStyle.Back, Enum.EasingDire
 -- 2026-09-17 -- owner, "remove favourite game for now" -- and JOIN THE GROUP
 -- (GROUP_ART) the same evening, once it was established that Roblox has no
 -- in-experience join prompt for a community at all (checked against the live
--- API dump: there is no Prompt* member for groups on any service).
+-- API dump: there is no Prompt* member for groups on any service). THAT HAS
+-- SINCE CHANGED: GroupService:PromptJoinAsync exists (confirmed in Studio
+-- 2026-10-02), and LobbyClient uses it for a one-time prompt after a round.
 -- `button` puts a pill on the row. Exactly one step has one, and it is the
 -- one Roblox gives a real dialog for: SocialService:PromptGameInvite. The
 -- like has no prompt and no check, so its row stays a sentence.
@@ -2116,23 +2373,22 @@ local function buildRewardsPanel(self: any, parent: Instance)
 	-- indexOf would answer 1 -- the plate would quietly preview Solid, which is
 	-- no pattern at all, and look like a rendering fault rather than a missing
 	-- catalogue entry.
-	if Patterns.REWARD_KEY ~= "" then
-		art.ImageContent = Content.fromObject(Patterns.swatch(Patterns.indexOf(Patterns.REWARD_KEY)))
-	end
-	-- WHAT IS ACTUALLY IN THE BOX, read off the catalogue so this can never
-	-- promise something the grant does not hand over. Three lines, in the order
-	-- they matter: the skin's name, the one thing wearing it does, and the
-	-- Money that comes with it.
-	local reward = Patterns.byKey(Patterns.REWARD_KEY)
+	-- THE MEGA NUKE, NOT THE CHEVRON (2026-09-25, owner): the sheet now gives
+	-- the MEGANUKE pass (MatchmakerServer REWARD_PASS), so the plate shows the
+	-- same art the rail card and the warhead in flight use.
+	art.Image = Icons.MEGA_NUKE
+	Icons.resample(art)
+	-- WHAT IS ACTUALLY IN THE BOX. Three lines, in the order they matter: the
+	-- pass's name, what it does (the rail tip's own words), and the Money that
+	-- comes with it.
 	setText(label(plate, "Words", RW_LEFT_W, RW_BODY_H, 0, 170, RW_LEFT_W, 26, INK, Enum.TextXAlignment.Center, FONT_BOLD),
-		if reward then string.upper(reward.name) .. " SKIN" else "FREE REWARD")
-	-- GREEN, because green on this page means gain -- the same colour the shop
-	-- prints a skin's perk in, and the same words, off the same function.
-	local perk = if reward then Patterns.perkText(reward) else nil
+		"MEGA NUKE ACCESS")
+	-- GREEN, because green on this page means gain.
 	setText(label(plate, "Perk", RW_LEFT_W, RW_BODY_H, 0, 202, RW_LEFT_W, 18, GAIN, Enum.TextXAlignment.Center, FONT_BOLD),
-		if perk then string.gsub(string.gsub(perk, "%(", ""), "%)", "") else "")
-	setText(label(plate, "Money", RW_LEFT_W, RW_BODY_H, 0, 232, RW_LEFT_W, 22, GOLD, Enum.TextXAlignment.Center, FONT_BOLD),
-		"+ 1,000 MONEY")
+		"4X A NUKE'S BLAST AREA")
+	local plateMoney = label(plate, "Money", RW_LEFT_W, RW_BODY_H, 0, 232, RW_LEFT_W, 22, GOLD, Enum.TextXAlignment.Center, FONT_BOLD)
+	setText(plateMoney, "+ 1,000")
+	MoneyNote.attach(plateMoney)
 
 	self.rewardRows = {}
 	for i = 1, #RW_TASKS do
@@ -2513,6 +2769,7 @@ local function paintRow(entry: any, item: any)
 
 	if entry.art.Image ~= item.art then
 		entry.art.Image = item.art
+		breathe(entry.art)
 	end
 	setText(entry.name, item.name)
 	-- The pill for any mode past the rotation: light blue for historical,
@@ -2711,6 +2968,49 @@ function LobbyUI.new(parent: Instance, myUserId: number): LobbyUI
 
 	setText(label(bar, "TagCap", CONTENT_W, BAR_H, 24, 32, 84, 13, INK_OFF, Enum.TextXAlignment.Left), "CLAN TAG")
 	self.tagBox = field(bar, "Tag", CONTENT_W, BAR_H, 124, 20, 118, 34, "TAG", TAG_MAX, true, Enum.TextXAlignment.Center, true, false)
+	-- THE CLAN TAG IS A BUTTON (2026-10-02, owner: "Instead of clan tag being a
+	-- text box, can it be a button"). It reads "+ ADD" until a tag is set and
+	-- the tag after; pressing it swaps in the text box, focused, in the same
+	-- place, and losing focus swaps back. The box itself stays -- LobbyClient
+	-- sends the tag on its FocusLost and `identity` reads its Text -- so the
+	-- button is only what the box looks like at rest.
+	do
+		local box = self.tagBox
+		local rule = bar:FindFirstChild("TagRule") :: GuiObject?
+		-- 116 wide, 15% thinner than the first 136 (owner, 2026-10-02), and
+		-- shifted right by half the difference so it keeps its centre.
+		local tagButton = pillButton(bar, "TagButton", CONTENT_W, BAR_H, 128, 15, 116, 42, "+ ADD")
+		-- PASSIVE SLATE, not violet (owner, 2026-10-05: "its taking focus away
+		-- too much, want it to be more passive colouring"). Violet is RANKED's
+		-- now; the tag keeps its raised shape but in the page's own quiet tone.
+		LobbyUI.raise3D(tagButton, Color3.fromRGB(44, 52, 70), Color3.fromRGB(96, 110, 140), 0.5)
+		local caption = tagButton:FindFirstChild("Caption") :: TextLabel
+		local function rest()
+			local tag = string.gsub(box.Text, "^%s*(.-)%s*$", "%1")
+			setText(caption, if tag == "" then "+ ADD" else tag)
+			tagButton.Visible = true
+			box.Visible = false
+			if rule then
+				rule.Visible = false
+			end
+		end
+		tagButton.Activated:Connect(function()
+			tagButton.Visible = false
+			box.Visible = true
+			if rule then
+				rule.Visible = true
+			end
+			box:CaptureFocus()
+		end)
+		box.FocusLost:Connect(rest)
+		-- A tag can also arrive from code (a saved one written into the box).
+		box:GetPropertyChangedSignal("Text"):Connect(function()
+			if not box:IsFocused() then
+				rest()
+			end
+		end)
+		rest()
+	end
 	self.nameBox = field(bar, "Name", CONTENT_W, BAR_H, 268, 20, 460, 36, "COMMANDER", NAME_MAX, false, Enum.TextXAlignment.Left, false, true)
 
 	-- THE WORDMARK, in the slot the typed-out name held. Same right edge, so
@@ -2743,11 +3043,34 @@ function LobbyUI.new(parent: Instance, myUserId: number): LobbyUI
 	-- hidden until the server has actually said what the balance is -- a "0"
 	-- printed while the profile is still loading is a worse answer than no
 	-- number at all.
-	self.moneyCap = label(bar, "MoneyCap", CONTENT_W, BAR_H, MONEY_X, 22, MONEY_W, 11, INK_OFF, Enum.TextXAlignment.Right)
-	setText(self.moneyCap, "MONEY")
-	self.moneyText = label(bar, "Money", CONTENT_W, BAR_H, MONEY_X, 36, MONEY_W, 24, GOLD, Enum.TextXAlignment.Right)
-	self.moneyCap.Visible = false
+	--
+	-- A BANKNOTE, NOT THE WORD (2026-10-02, owner: "for money, use a pixel image
+	-- of money instead of just saying money"). Painted like the gift (see
+	-- pixelImage), and it HUGS the number: the figure is right-aligned and
+	-- changes width, so the note is re-placed off its TextBounds rather than
+	-- parked at the box's left edge, where a short balance would leave a gap.
+	-- It is `moneyCap` still, so setMoney shows and hides it with the number.
+	self.moneyText = label(bar, "Money", CONTENT_W, BAR_H, MONEY_X, 26, MONEY_W, 26, GOLD, Enum.TextXAlignment.Right, FONT_BOLD)
 	self.moneyText.Visible = false
+	do
+		-- The art lives in MoneyNote now, which every other Money figure uses.
+		local note = pixelImage(bar, "MoneyIcon", MoneyNote.ART)
+		note.AnchorPoint = Vector2.new(1, 0.5)
+		note.Size = UDim2.fromScale(44 / CONTENT_W, 27 / BAR_H)
+		note.Visible = false
+		local text = self.moneyText
+		local right = (MONEY_X + MONEY_W) / CONTENT_W
+		local function hug()
+			local bw = bar.AbsoluteSize.X
+			if bw > 0 then
+				note.Position = UDim2.new(right - text.TextBounds.X / bw, -8, 39 / BAR_H, 0)
+			end
+		end
+		text:GetPropertyChangedSignal("TextBounds"):Connect(hug)
+		bar:GetPropertyChangedSignal("AbsoluteSize"):Connect(hug)
+		hug()
+		self.moneyCap = note
+	end
 
 	-- ------------------------------------------------------ free rewards --
 	-- In the strip the bar stops short of, and GREEN for the reason the shop
@@ -2864,6 +3187,32 @@ function LobbyUI.new(parent: Instance, myUserId: number): LobbyUI
 
 	LobbyUI.paintNation(self)
 
+
+	-- < > ON THE BIG CARD (2026-10-02, owner: "add < > on the big display screen
+	-- so i can scroll through remaining games i can join"). Straddling the big
+	-- card's left and right edges, half on and half off like the reference.
+	-- Each press steps the big card to the next lobby you could join that the
+	-- two small cards are not already showing -- see LobbyUI.flipBig. Parented
+	-- to the page, not the card, so the card's hover swell does not carry them
+	-- and a press on one is never also a press on the card under it.
+	do
+		local AW, AH = 46, 92 -- 15% thinner than the first 54 (owner, 2026-10-02)
+		local ay = BLOCK_Y + (BLOCK_H - AH) / 2
+		self.bigPrev = pillButton(root, "BigPrev", REF_W, REF_H, PAGE_M - AW / 2, ay, AW, AH, "<")
+		self.bigNext = pillButton(root, "BigNext", REF_W, REF_H, PAGE_M + BIG_W - AW / 2, ay, AW, AH, ">")
+		for _, b in { self.bigPrev, self.bigNext } do
+			b.ZIndex = 10
+			b.Visible = false
+			-- Gold, like the reference's arrows: deep fill, GOLD edge.
+			LobbyUI.raise3D(b, Color3.fromRGB(146, 104, 24), GOLD, 0.42)
+		end
+		self.bigPrev.Activated:Connect(function()
+			LobbyUI.flipBig(self, -1)
+		end)
+		self.bigNext.Activated:Connect(function()
+			LobbyUI.flipBig(self, 1)
+		end)
+	end
 
 	-- ONE BIG CARD AND TWO SMALL ONES, which is the reference's whole layout
 	-- and the thing a row of three equal cards was not.
@@ -2989,10 +3338,10 @@ function LobbyUI.new(parent: Instance, myUserId: number): LobbyUI
 		LobbyUI.openList(self)
 	end)
 
-	-- SHOP / CREATE LOBBY / JOIN LOBBY, across the span the reference gives
-	-- its three. Still no SOLO and no RANKED: a solo button on a page whose whole
-	-- point is filling a lobby is a way out of the thing you came for, and
-	-- there is no ranked ladder to enter. And no LEARN TO PLAY: a player who
+	-- SHOP / CREATE LOBBY / JOIN LOBBY / RANKED. Still no SOLO: a solo button
+	-- on a page whose whole point is filling a lobby is a way out of the thing
+	-- you came for. RANKED arrived 2026-10-05 with the ladder (RankedUI). And
+	-- no LEARN TO PLAY: a player who
 	-- has never been here is already inside the tutorial by the time this page
 	-- would first draw for them, so the button could only ever have offered
 	-- them the thing they had just finished. /tutorial is the way back in.
@@ -3002,6 +3351,17 @@ function LobbyUI.new(parent: Instance, myUserId: number): LobbyUI
 		PAGE_M + BTN_W + BTN_GAP, BTN_Y, BTN_W, BTN_H, "CREATE LOBBY")
 	self.joinButton = pillButton(root, "JoinLobby", REF_W, REF_H,
 		PAGE_M + (BTN_W + BTN_GAP) * 2, BTN_Y, BTN_W, BTN_H, "JOIN LOBBY")
+	self.rankedButton = pillButton(root, "Ranked", REF_W, REF_H,
+		PAGE_M + (BTN_W + BTN_GAP) * 3, BTN_Y, BTN_W, BTN_H, "RANKED",
+		-- Violet, the top rank's metal. Inline, not locals: this chunk is at
+		-- Luau's 200-local ceiling (see Breathe).
+		Color3.fromRGB(86, 40, 150), Color3.fromRGB(196, 140, 255))
+	-- LobbyClient wires it to RankedUI, the same way it wires the shop.
+	self.rankedButton.Activated:Connect(function()
+		if self.onRanked then
+			self.onRanked()
+		end
+	end)
 
 	-- CREATE goes straight out with whatever settings this page is holding --
 	-- there is nothing to configure until a room exists to configure, and a
@@ -3187,6 +3547,89 @@ local function joinable(view: Matchmaker.CardView?): boolean
 	return view ~= nil and view.state == "open" and view.count < view.cap
 end
 
+-- AT LEAST ONE CARD ON THE PAGE IS BIGGER THAN A SKIRMISH (2026-09-29, owner:
+-- "ensure theres at least one non 6 player game on the front page"). The
+-- small cards fill fastest, so fillRank alone put three sixes on the page and
+-- the 12s and 24s lived in SEE ALL GAMES. If no drawn card is bigger, the
+-- lowest drawn card that is not yours gives its place to the best joinable
+-- bigger lobby. `order` is either the first board's full permutation (kept a
+-- permutation by swapping) or the held positions.
+local function ensureBig(order: { number }, cards: { Matchmaker.CardView }, seats: number)
+	local small = Matchmaker.SLOTS[1].cap
+	local onPage = {}
+	for pos = 1, seats do
+		local view = order[pos] and cards[order[pos]]
+		if view and view.cap > small then
+			return
+		end
+		if order[pos] then
+			onPage[order[pos]] = true
+		end
+	end
+	local best = nil
+	for i, view in cards do
+		if not onPage[i] and view.cap > small and joinable(view)
+			and (best == nil or fillRank(view, cards[best])) then
+			best = i
+		end
+	end
+	if best == nil then
+		return
+	end
+	for pos = seats, 1, -1 do
+		local view = order[pos] and cards[order[pos]]
+		if view and not view.mine then
+			local at = table.find(order, best)
+			if at then
+				order[at] = order[pos]
+			end
+			order[pos] = best
+			return
+		end
+	end
+end
+
+-- A FEATURED LOBBY ALWAYS HAS THE BIG CARD (2026-10-02, owner, of ADMIN ABUSE:
+-- "Make it always appear in the biggest frame"). Position 1 is the big card.
+-- Whenever a lobby whose mode is FEATURED is on the board, full or not, it is
+-- moved there. If it was already drawn it swaps places with whatever held the
+-- big card; if not, the big card's lobby moves down to the lowest card that is
+-- not yours, and the lobby there leaves the page. `order` is either the first
+-- board's full permutation (kept a permutation) or the held positions.
+local function putFeatured(order: { number }, cards: { Matchmaker.CardView }, seats: number)
+	local featured = nil
+	for i, view in cards do
+		if view.featured then
+			featured = i
+			break
+		end
+	end
+	if featured == nil or order[1] == featured then
+		return
+	end
+	local at = table.find(order, featured)
+	if at and at <= seats then
+		order[at], order[1] = order[1], featured
+		return
+	end
+	local victim = 1
+	for pos = seats, 2, -1 do
+		local view = order[pos] and cards[order[pos]]
+		if not (view and view.mine) then
+			victim = pos
+			break
+		end
+	end
+	local out = order[victim]
+	if victim ~= 1 then
+		order[victim] = order[1]
+	end
+	order[1] = featured
+	if at then
+		order[at] = out
+	end
+end
+
 local function rankBoard(self: LobbyUI, cards: { Matchmaker.CardView }): { number }
 	local seats = #self.cards
 	local held = self.order
@@ -3207,6 +3650,8 @@ local function rankBoard(self: LobbyUI, cards: { Matchmaker.CardView }): { numbe
 		if mineAt and mineAt > seats then
 			table.insert(order, seats, table.remove(order, mineAt))
 		end
+		putFeatured(order, cards, seats)
+		ensureBig(order, cards, seats)
 		-- A PRESS MADE BEFORE THE FIRST BOARD CANNOT BE HONOURED. There is no
 		-- previous order to pin it to, so the sort above may point the pressed
 		-- slot at a different lobby -- and the optimistic JOINED paint and the
@@ -3299,7 +3744,61 @@ local function rankBoard(self: LobbyUI, cards: { Matchmaker.CardView }): { numbe
 			end
 		end
 	end
+	-- A lobby the player paged to with < > keeps the big card until it is
+	-- spent (above) -- the featured lobby only takes it back after that.
+	if not (self.bigPick ~= nil and held[1] == self.bigPick) then
+		self.bigPick = nil
+		putFeatured(held, cards, seats)
+	end
+	ensureBig(held, cards, seats)
 	return held
+end
+
+-- What the big card's < > step through: the lobby it shows now, and every
+-- lobby you could join that neither small card is showing. In SLOT order, not
+-- fill order -- counts move every second, and a list that reorders itself
+-- between two presses steps backwards.
+function LobbyUI.bigPool(self: LobbyUI): { number }
+	local pool = {}
+	local order, cards = self.order, self.board
+	if order == nil or cards == nil then
+		return pool
+	end
+	local others = {}
+	for pos = 2, #self.cards do
+		if order[pos] then
+			others[order[pos]] = true
+		end
+	end
+	for i, view in cards do
+		if not others[i] and (i == order[1] or joinable(view)) then
+			table.insert(pool, i)
+		end
+	end
+	table.sort(pool)
+	return pool
+end
+
+-- One press of < (-1) or > (1). The pick is remembered (self.bigPick) so the
+-- next board does not hand the big card straight back to the featured lobby;
+-- rankBoard drops it once that lobby is spent. Nothing moves while a join is
+-- in flight, for the reason rankBoard holds still then too.
+function LobbyUI.flipBig(self: LobbyUI, dir: number)
+	for _, entry in self.cards do
+		if entry.pending ~= nil then
+			return
+		end
+	end
+	local pool = LobbyUI.bigPool(self)
+	if #pool < 2 then
+		return
+	end
+	local at = table.find(pool, self.order[1]) or 1
+	local pick = pool[(at - 1 + dir) % #pool + 1]
+	self.order[1] = pick
+	self.bigPick = pick
+	LobbyUI.setBoard(self, self.board)
+	flashCard(self.cards[1])
 end
 
 function LobbyUI.setBoard(self: LobbyUI, cards: { Matchmaker.CardView })
@@ -3322,6 +3821,7 @@ function LobbyUI.setBoard(self: LobbyUI, cards: { Matchmaker.CardView })
 			local art = MAP_ART[view.map] or ""
 			if entry.art.Image ~= art then
 				entry.art.Image = art
+				breathe(entry.art)
 			end
 			setText(entry.mapName, string.upper(view.mapName))
 			setText(entry.modeName, string.upper(view.modeName))
@@ -3336,6 +3836,15 @@ function LobbyUI.setBoard(self: LobbyUI, cards: { Matchmaker.CardView })
 				entry.modeChip.BackgroundColor3 = if view.special then MODE_PILL.special else MODE_PILL.historical
 				setText(entry.modeChipText, string.upper(view.modeName))
 			end
+			-- The second line, if the mode has one (see buildCard).
+			local sub = view.subtitle
+			entry.modeSub.Visible = sub ~= nil
+			if sub then
+				setText(entry.modeSub, string.upper(sub))
+			end
+			local lift = if sub then entry.subLift else UDim2.new()
+			entry.mapName.Position = entry.mapAt - lift
+			entry.modeChip.Position = entry.chipAt - lift
 			paintFaces(entry, view.users, self.myUserId)
 
 			entry.state = view.state
@@ -3364,6 +3873,13 @@ function LobbyUI.setBoard(self: LobbyUI, cards: { Matchmaker.CardView })
 
 			paintCard(entry)
 		end
+	end
+
+	-- The < > only show when there is somewhere for them to go.
+	if self.bigPrev then
+		local more = #LobbyUI.bigPool(self) > 1
+		self.bigPrev.Visible = more
+		self.bigNext.Visible = more
 	end
 
 	LobbyUI.paintDoor(self)
@@ -3539,7 +4055,7 @@ function LobbyUI.rewardLanded(self: LobbyUI)
 	self.rewardArtScale.Scale = 1.18
 	tween(self.rewardArtScale, RW_LAND_PUNCH, { Scale = 1 })
 	-- The one thing the sheet cannot show: where the skin went.
-	LobbyUI.rewardSay(self, "CLAIMED -- WEAR IT IN THE SHOP")
+	LobbyUI.rewardSay(self, "CLAIMED -- MEGA NUKE UNLOCKED")
 end
 
 -- The sheet's own message line. Four seconds, cleared in `step`.

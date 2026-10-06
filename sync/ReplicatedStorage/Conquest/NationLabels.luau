@@ -21,6 +21,7 @@ local Config = require(script.Parent.Config)
 local Numbers = require(script.Parent.Numbers)
 local Icons = require(script.Parent.Icons)
 local Flags = require(script.Parent.Flags)
+local RankEmblems = require(script.Parent.RankEmblems)
 
 -- WHICH FLAG EACH EMPIRE FLIES, and it lives HERE rather than in ConquestClient
 -- for one hard reason: ConquestClient is AT Luau's 200-local ceiling. A single
@@ -38,6 +39,10 @@ local flagOwner: { [number]: string } = {}
 -- DiplomacyClient sets it, and ConquestClient -- at the ceiling -- never
 -- learns the word.
 local markOf: { [number]: string } = {}
+-- RANKED (2026-10-05): the emblem id each empire wears, RIGHT of its name --
+-- the mirror of the flag on the left. Set only in ranked rounds (the roster's
+-- `r`), so everywhere else this stays empty and nothing is built.
+local rankOwner: { [number]: string } = {}
 -- The owner's art, read off StarterGui.Images the way every sticker is. A
 -- kind with no art is never drawn rather than drawn broken.
 local MARK_IMAGE: { [string]: string } = {}
@@ -183,6 +188,35 @@ local POP_REINFORCE_SCALE = 0.68
 -- floor a spammed reinforcement stacks four swords on one tile.
 local POP_REINFORCE_GAP = 0.35
 
+-- TWO BLADES THAT MEET ON THE BEAT (owner, 2026-10-02: "make it 2 swords
+-- clashing with each other that matches the sound"). An outgoing pop is a
+-- pair of swords -- the one sticker, and itself turned a quarter -- that draw
+-- back and slam into an X, with a spark where they cross, on the Clash cue's
+-- three blows. Only a pop the cue is for gets the pair; anything else (a war
+-- you already opened, a reinforcement, a teammate's war) is the single sword.
+-- One table, not nine locals.
+local CLASH = {
+	-- Sfx's REPEATS.Clash / REPEAT_GAP.Clash, mirrored: the beats you hear.
+	STRIKES = 3,
+	GAP = 0.24,
+	-- A clash raised this soon after the cue started is the one the cue is
+	-- for. A war on an empire is raised by the NEXT armies broadcast, up to a
+	-- fifth of a second behind the press, so it joins the cue mid-flurry.
+	SYNC = 0.4,
+	FIRST = 0.05, -- the first meeting, a hair after the press
+	TAIL = 0.45, -- held crossed after the last blow, then gone
+	-- BIGGER SWINGS (owner, 2026-10-02: "i want the range of motion of the
+	-- swords to be bigger"). Past upright and over the shoulder -- 45 is
+	-- vertical -- and pulled well apart, so each blow travels a real arc.
+	WIND = 80, -- degrees each blade draws back between blows
+	SPREAD = 0.34, -- ...and how far apart, as a share of the pop
+	RECOIL = 18, -- degrees the blades bounce off the last blow
+	SPARK = 0.14, -- seconds the spark at each blow lasts
+	-- Where the blades cross, in the pop's own Scale: a touch above centre,
+	-- because the sticker's blade sits above-right of its middle.
+	CROSS = Vector2.new(0.5, 0.42),
+}
+
 local NationLabels = {}
 NationLabels.__index = NationLabels
 
@@ -197,6 +231,13 @@ end
 -- would fly the last occupant's flag over whoever inherits the number.
 function NationLabels.clearFlags()
 	table.clear(flagOwner)
+	table.clear(rankOwner)
+end
+
+-- `index` is Ranked.LADDER's; nil (every non-ranked round) clears it.
+function NationLabels.setRank(id: number, index: number?)
+	local rid = index and RankEmblems.ORDER[index] or nil
+	rankOwner[id] = rid
 end
 
 -- `kind` is "ally", "traitor" or nil. Static, like setFlag, and for the same
@@ -359,6 +400,31 @@ local function buildFlag(e: any, id: string)
 	e.flagId = id
 end
 
+-- The ranked emblem, right of the name. Built on demand like the flag.
+local function buildRank(e: any, id: string)
+	if e.rank then
+		e.rank:Destroy()
+		e.rank = nil
+	end
+	local img = RankEmblems.image(e.holder, "Rank", id)
+	if img == nil then
+		e.rankId = nil
+		return
+	end
+	img.Active = false
+	img.ZIndex = 6
+	-- Anchored on its LEFT edge: the gap to the name's last letter is what
+	-- has to land precisely.
+	img.AnchorPoint = Vector2.new(0, 0.5)
+	img.Size = UDim2.fromScale(1, NAME_H * 0.95)
+	local ar = Instance.new("UIAspectRatioConstraint")
+	ar.AspectRatio = 1
+	ar.DominantAxis = Enum.DominantAxis.Height
+	ar.Parent = img
+	e.rank = img
+	e.rankId = id
+end
+
 -- The mark, under the army figure. Built on demand like the face and the flag.
 local function buildMark(e: any, kind: string)
 	if e.mark then
@@ -461,6 +527,7 @@ local function build(self: NationLabels, id: number)
 		-- own flag because a face leaves the map before its name does.
 		face = nil, pic = nil, userId = 0, faceVis = nil,
 		flag = nil, flagId = nil,
+		rank = nil, rankId = nil,
 		mark = nil, markKind = nil, markVis = nil,
 		-- swordFrac is the figure's measured width share the blade is currently
 		-- parked against; -1 so the first measurement always takes.
@@ -579,6 +646,22 @@ function NationLabels.update(self: NationLabels, renderer: any, players: { any }
 					e.flag, e.flagId = nil, nil
 				end
 
+				-- THE RANKED EMBLEM, against the rendered name like the flag.
+				local rid = rankOwner[p.id]
+				if rid ~= nil then
+					if e.rankId ~= rid then
+						buildRank(e, rid)
+					end
+					local rw = e.name.AbsoluteSize.X
+					if e.rank and rw > 1 then
+						local frac = math.clamp(e.name.TextBounds.X / rw, 0, 1)
+						e.rank.Position = UDim2.fromScale(0.5 + frac / 2 + FLAG_GAP, NAME_H / 2)
+					end
+				elseif e.rank then
+					e.rank:Destroy()
+					e.rank, e.rankId = nil, nil
+				end
+
 				-- THE DIPLOMACY MARK. Rebuilt only when the kind changes.
 				local mk = markOf[p.id]
 				if mk ~= nil then
@@ -648,7 +731,90 @@ local function buildArmy(self: NationLabels, key: number)
 	return e
 end
 
+local function spawnClash(self: NationLabels, x: number, y: number, scale: number?)
+	local holder = Instance.new("Frame")
+	holder.Name = "Clash"
+	holder.BackgroundTransparency = 1
+	holder.AnchorPoint = Vector2.new(0.5, 0.5)
+	-- Same rule as every other label here: it must not eat a map click.
+	holder.Active = false
+	holder.ZIndex = 9
+	holder.Size = UDim2.fromScale(0, 0)
+	holder.Position = UDim2.fromScale(x / W, y / H)
+	holder.Parent = self.root
+
+	local function blade(name: string): ImageLabel
+		local b = Instance.new("ImageLabel")
+		b.Name = name
+		b.BackgroundTransparency = 1
+		b.Image = POP_ICON_OUT
+		b.ScaleType = Enum.ScaleType.Fit
+		b.AnchorPoint = Vector2.new(0.5, 0.5)
+		b.Active = false
+		b.ZIndex = 9
+		b.Size = UDim2.fromScale(0.8, 0.8)
+		b.Position = UDim2.fromScale(0.5, 0.5)
+		b.Parent = holder
+		return b
+	end
+	-- The sticker points up and to the right. Turned a quarter anticlockwise it
+	-- points up and to the left: the same sword from the other side, and the
+	-- two together are an X.
+	local left = blade("Left")
+	local right = blade("Right")
+
+	local spark = Instance.new("Frame")
+	spark.Name = "Spark"
+	spark.BorderSizePixel = 0
+	spark.BackgroundColor3 = Color3.fromRGB(255, 246, 196)
+	spark.BackgroundTransparency = 1
+	spark.AnchorPoint = Vector2.new(0.5, 0.5)
+	spark.Position = UDim2.fromScale(CLASH.CROSS.X, CLASH.CROSS.Y)
+	spark.Size = UDim2.fromScale(0, 0)
+	spark.Active = false
+	spark.ZIndex = 10
+	local sc = Instance.new("UICorner")
+	sc.CornerRadius = UDim.new(1, 0)
+	sc.Parent = spark
+	spark.Parent = holder
+
+	-- Joining late starts the clock where the cue already is, so the blades
+	-- still land on the blows you hear rather than a fifth of a second after.
+	-- spawnPop only sends a pop here when the cue is this pop's.
+	local strikes = CLASH.STRIKES
+	local t = math.max(0, os.clock() - (self.clashAt or os.clock()))
+	self.clashAt = nil
+	table.insert(self.pops, {
+		img = holder,
+		left = left,
+		right = right,
+		spark = spark,
+		strikes = strikes,
+		x = x,
+		y = y,
+		t = t,
+		scale = scale or 1,
+	})
+end
+
+-- The Clash cue just started (ConquestClient, on the press). The next outgoing
+-- pop inside CLASH.SYNC is the one it belongs to.
+function NationLabels.markClash(self: NationLabels)
+	self.clashAt = os.clock()
+end
+
 local function spawnPop(self: NationLabels, x: number, y: number, incoming: boolean, scale: number?)
+	-- THE CLASH ONLY WITH THE CUE (owner, 2026-10-02: "dont do 1 clash
+	-- animations, just show a singular sword instead"). A war you have already
+	-- opened answers with the Charge, not the Clash, and a pair of blades that
+	-- meet once under it read as a clash cut short. So: the cue that just
+	-- started is this pop's -> the three-blow clash; anything else -> the
+	-- single sword below, exactly as it was.
+	local since = os.clock() - (self.clashAt or -1e9)
+	if not incoming and (scale or 1) >= 1 and since >= 0 and since < CLASH.SYNC then
+		spawnClash(self, x, y, scale)
+		return
+	end
 	local img = Instance.new("ImageLabel")
 	img.Name = "Pop"
 	img.BackgroundTransparency = 1
@@ -975,6 +1141,68 @@ function NationLabels.step(self: NationLabels, dt: number, zoom: number)
 		for i = #self.pops, 1, -1 do
 			local p = self.pops[i]
 			p.t += dt
+			if p.left then
+				-- THE CLASH. `theta` is how far each blade is drawn back from
+				-- the X: 0 is the moment of the blow, CLASH.WIND is wound up.
+				local lastBeat = CLASH.FIRST + (p.strikes - 1) * CLASH.GAP
+				local life = lastBeat + CLASH.TAIL
+				if p.t >= life then
+					p.img:Destroy()
+					table.remove(self.pops, i)
+					continue
+				end
+				local k = math.floor((p.t - CLASH.FIRST) / CLASH.GAP)
+				local theta, since
+				if k < 0 then
+					-- Swinging in to the first blow.
+					local u = p.t / CLASH.FIRST
+					theta = CLASH.WIND * (1 - u * u)
+				else
+					k = math.min(k, p.strikes - 1)
+					since = p.t - (CLASH.FIRST + k * CLASH.GAP)
+					if k < p.strikes - 1 then
+						-- Rebound off the blow, then swing in again for the next:
+						-- out fast, in faster, so the meeting is the hard part.
+						local u = since / CLASH.GAP
+						if u < 0.55 then
+							theta = CLASH.WIND * math.sin(u / 0.55 * math.pi / 2)
+						else
+							local v = (u - 0.55) / 0.45
+							theta = CLASH.WIND * (1 - v * v)
+						end
+					else
+						-- The last blow holds: a small recoil, then still.
+						theta = CLASH.RECOIL * math.sin(math.min(since / 0.12, 1) * math.pi / 2)
+					end
+				end
+				local spread = CLASH.SPREAD * theta / CLASH.WIND
+				p.left.Rotation = -theta
+				p.right.Rotation = -90 + theta
+				p.left.Position = UDim2.fromScale(0.5 - spread, 0.5)
+				p.right.Position = UDim2.fromScale(0.5 + spread, 0.5)
+
+				-- A spark and a punch on every blow.
+				local punch = 1
+				if since ~= nil and since < CLASH.SPARK then
+					local s = since / CLASH.SPARK
+					p.spark.Size = UDim2.fromScale(0.2 + 0.5 * s, 0.2 + 0.5 * s)
+					p.spark.BackgroundTransparency = s
+					punch = 1 + 0.16 * (1 - s)
+				else
+					p.spark.BackgroundTransparency = 1
+				end
+
+				local grow = math.min(p.t / 0.06, 1)
+				grow = grow * grow * (3 - 2 * grow)
+				local s = grow * punch * d * p.scale
+				p.img.Size = UDim2.fromScale(s / W, s / H)
+				local f = p.t / life
+				p.img.Position = UDim2.fromScale(p.x / W, (p.y - rise * f) / H)
+				local fade = math.max(0, (p.t - (life - 0.25)) / 0.25)
+				p.left.ImageTransparency = fade
+				p.right.ImageTransparency = fade
+				continue
+			end
 			local f = p.t / POP_LIFE
 			if f >= 1 then
 				p.img:Destroy()

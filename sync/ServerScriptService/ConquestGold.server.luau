@@ -119,14 +119,24 @@ end
 
 -- ================================================================ dispatch ==
 
--- Studio is open season; a live server allows only the owner. Same gate as
--- /simulate and /start.
+-- Studio is open season; a live server allows only the owner -- same gate as
+-- /simulate and /start -- plus the ids below (owner, 2026-09-25: "give that
+-- player /gold command"). By USER ID, never by name.
+local EXTRA: { [number]: boolean } = {
+	[10514449147] = true, -- naitik_herobrine
+	[5532778710] = true, -- Pizzalt5
+	[3157330971] = true, -- MeshShadow
+}
+
 local function allowed(player: Player?): boolean
 	if RunService:IsStudio() then
 		return true
 	end
 	if not player then
 		return false
+	end
+	if EXTRA[player.UserId] then
+		return true
 	end
 	return game.CreatorType == Enum.CreatorType.User and player.UserId == game.CreatorId
 end
@@ -144,7 +154,10 @@ local function dispatch(player: Player?, text: string)
 	lastFire[key] = now
 
 	if not allowed(player) then
-		tell(player, "/gold is for the owner only.")
+		-- The id and the "v2" tag say, from one screenshot, which build a live
+		-- server is running and which id it actually saw.
+		tell(player, ("/gold is for the owner only. (id %s, v2)"):format(
+			if player then tostring(player.UserId) else "?"))
 		return
 	end
 
