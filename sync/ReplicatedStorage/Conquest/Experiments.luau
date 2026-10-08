@@ -35,7 +35,11 @@ end
 -- real Robux price on its pill ("price"); the other half keep "GET", the
 -- label shipped 2026-09-22 ("get"). Read it on the `passab_prompt` /
 -- `passab_bought` custom events, broken down by `arm` (field 1).
+-- 2026-10-08: TEST ENDED, "price" won the call -- every account sees the
+-- Robux price now. The hash stays for the next test; events keep logging,
+-- all filed under arm "price".
 Experiments.PASS_LABEL_ARMS = { "get", "price" }
+Experiments.PASS_LABEL_TEST_LIVE = false
 
 function Experiments.passLabelArm(userId: number?): string
 	if Experiments.previewPassLabel ~= nil then
@@ -43,6 +47,9 @@ function Experiments.passLabelArm(userId: number?): string
 	end
 	if Experiments.FORCE_PASS_LABEL ~= nil then
 		return Experiments.FORCE_PASS_LABEL
+	end
+	if not Experiments.PASS_LABEL_TEST_LIVE then
+		return "price"
 	end
 	if type(userId) ~= "number" or userId <= 0 then
 		return "get"
