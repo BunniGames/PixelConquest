@@ -168,13 +168,32 @@ end
 -- the rank is whichever LADDER `rr` total it has reached. A loss below the
 -- current rank's total ranks you down -- unless a rank-up's SHIELD is up, in
 -- which case it stops at that total.
-function Ranked.applyRR(block: any, won: boolean): number
+-- A LOSS NEVER COSTS MORE THAN TWO WINS (owner, 2026-10-08: "players never
+-- lose more than 2 [times] what they get for the average win ... if a player
+-- gets 15 on average, they should not lose more than 30"). The win it is
+-- measured against is the one this same round would have paid, read at the
+-- MMR the player walked in with (`before`): by now the MMR has already
+-- dropped for the loss, which would shrink the very win it is capped by. It
+-- is the clamped win (never under RR_WIN_MIN), not OVER_CAP's 0, or a player
+-- over-ranked by two ranks could never lose RR at all. It binds once the MMR
+-- sits ~0.4 of a rank under the badge: a rank over is -10/+5 (was -45/+5).
+Ranked.LOSS_PER_WIN = 2
+
+local function gapAt(block: any, rating: number): number
 	local lo, hi = Ranked.span(block.rank)
 	local here = (block.rank - 1) + math.clamp((block.rr - lo) / (hi - lo), 0, 1)
-	local gap = Ranked.mmrPos(block.rating) - here
+	return Ranked.mmrPos(rating) - here
+end
+
+local function winAt(gap: number): number
+	return math.clamp(Ranked.RR_WIN + Ranked.RR_K * gap, Ranked.RR_WIN_MIN, Ranked.RR_WIN_MAX)
+end
+
+function Ranked.applyRR(block: any, won: boolean, before: number?): number
+	local gap = gapAt(block, block.rating)
 	local d
 	if won then
-		d = math.clamp(Ranked.RR_WIN + Ranked.RR_K * gap, Ranked.RR_WIN_MIN, Ranked.RR_WIN_MAX)
+		d = winAt(gap)
 		-- RANKED ABOVE YOUR MMR BY OVER_CAP RANKS OR MORE: a win pays no RR.
 		-- Without it, wins that move no MMR (an alt, a stomp) still paid
 		-- RR_WIN_MIN each and climbed forever.
@@ -183,6 +202,7 @@ function Ranked.applyRR(block: any, won: boolean): number
 		end
 	else
 		d = -math.clamp(Ranked.RR_LOSS - Ranked.RR_K * gap, Ranked.RR_LOSS_MIN, Ranked.RR_LOSS_MAX)
+		d = math.max(d, -Ranked.LOSS_PER_WIN * winAt(gapAt(block, before or block.rating)))
 	end
 	d = math.floor(d + 0.5)
 	local total = math.max(0, block.rr + d)

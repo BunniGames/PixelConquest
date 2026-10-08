@@ -274,7 +274,7 @@ local function settle(player: Player, won: boolean, why: string, unrated: boolea
 	end
 	-- THE VISIBLE RANK MOVES BY RR, pulled toward where the new MMR says
 	-- this player belongs (Ranked.applyRR).
-	local rrDelta = Ranked.applyRR(b, won)
+	local rrDelta = Ranked.applyRR(b, won, oldRating)
 
 	-- FIRST TIME AT A RANK PAYS ITS REWARD. One rank per match at most now
 	-- (RR carries over at 100), but the loop still pays every rank skipped.
