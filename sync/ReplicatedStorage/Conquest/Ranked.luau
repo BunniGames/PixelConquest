@@ -275,6 +275,14 @@ Ranked.MODE = "ranked"
 -- The largest party, which is the largest side.
 Ranked.MAX_PARTY = 4
 
+-- THE LEADERBOARD (owner, 2026-10-08: "a leaderboard ... that displays top X
+-- players in terms of their RR"). One OrderedDataStore keyed by user id with
+-- the RR total as its value: a rated match writes it (RankedMatch.settle), and
+-- so does joining a server, so players who ranked before the board existed
+-- are on it from their next visit. The lobby reads the top BOARD_SIZE.
+Ranked.BOARD_STORE = "ConquestRankedRR_v1"
+Ranked.BOARD_SIZE = 100
+
 -- ============================================================ rating maths ==
 
 -- Faster movement while a rating is still finding its level.

@@ -25,6 +25,7 @@ local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local HttpService = game:GetService("HttpService")
 local RunService = game:GetService("RunService")
+local DataStoreService = game:GetService("DataStoreService")
 
 local Shared = ReplicatedStorage:WaitForChild("Conquest")
 local Ranked = require(Shared.Ranked)
@@ -239,6 +240,20 @@ local function opposingAverage(c: Ctx, side: number): number
 	return n > 0 and sum / n or Ranked.START
 end
 
+-- The leaderboard's copy of a player's RR (Ranked.BOARD_STORE). Off the
+-- tick: a DataStore write yields.
+local boardStore = DataStoreService:GetOrderedDataStore(Ranked.BOARD_STORE)
+local function postRR(uid: number, rr: number)
+	task.spawn(function()
+		local ok, err = pcall(function()
+			boardStore:SetAsync(tostring(uid), math.max(0, math.floor(rr)))
+		end)
+		if not ok then
+			warn("[Ranked] board write failed: " .. tostring(err))
+		end
+	end)
+end
+
 -- Rates one player. Idempotent per user id. Pays every rank's reward the
 -- first time that rank is reached, and tells the player's client.
 local function settle(player: Player, won: boolean, why: string, unrated: boolean?)
@@ -275,6 +290,7 @@ local function settle(player: Player, won: boolean, why: string, unrated: boolea
 	-- THE VISIBLE RANK MOVES BY RR, pulled toward where the new MMR says
 	-- this player belongs (Ranked.applyRR).
 	local rrDelta = Ranked.applyRR(b, won, oldRating)
+	postRR(player.UserId, b.rr)
 
 	-- FIRST TIME AT A RANK PAYS ITS REWARD. One rank per match at most now
 	-- (RR carries over at 100), but the loop still pays every rank skipped.

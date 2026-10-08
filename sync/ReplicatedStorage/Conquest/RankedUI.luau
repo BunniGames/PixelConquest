@@ -163,6 +163,11 @@ function RankedUI.new(screen: ScreenGui, onLeaveBoard: (() -> ())?)
 	close.Activated:Connect(function()
 		self:close()
 	end)
+	-- Mirrors the X on the left.
+	local boardBtn = pillButton(panel, "Board", PW, PH, 16, 16, 170, 44, "LEADERBOARD")
+	boardBtn.Activated:Connect(function()
+		self:openBoard()
+	end)
 
 	-- ------------------------------------------------------------ you card
 	local card = slab(panel, "You", PW, PH, 24, 72, 270, 316)
@@ -345,6 +350,71 @@ function RankedUI.new(screen: ScreenGui, onLeaveBoard: (() -> ())?)
 	self.fpage = 1
 	self.invited = {} :: { [number]: number }
 
+	-- ------------------------------------------------------- leaderboard
+	-- Over everything under the title: the top Ranked.BOARD_SIZE by RR,
+	-- BOARD_ROWS a page. Your own row is lit violet, like your ladder rung.
+	local BW, BH = PW - 48, PH - 72 - 18
+	local bsheet = Instance.new("Frame")
+	bsheet.Name = "Leaderboard"
+	bsheet.BackgroundColor3 = kit.PANEL
+	bsheet.BackgroundTransparency = 0
+	bsheet.BorderSizePixel = 0
+	bsheet.Active = true
+	bsheet.Visible = false
+	bsheet.ZIndex = 10
+	place(bsheet, PW, PH, 24, 72, BW, BH)
+	bsheet.Parent = panel
+	roundOff(bsheet, 10)
+	local bst = Instance.new("UIStroke")
+	bst.Color = VIOLET_LINE
+	bst.Thickness = 1.6
+	bst.Transparency = 0.3
+	bst.Parent = bsheet
+	label(bsheet, "Title", BW, BH, 16, 12, 300, 20, GOLD, Enum.TextXAlignment.Left, kit.FONT_BOLD).Text =
+		"TOP " .. Ranked.BOARD_SIZE
+	local bback = pillButton(bsheet, "Back", BW, BH, BW - 14 - 84, 8, 84, 28, "BACK")
+	bback.Activated:Connect(function()
+		self:closeBoard()
+	end)
+	self.boardRows = {}
+	local BROWS, RH, GAP = 10, 34, 4
+	local RWb = BW - 32
+	for i = 1, BROWS do
+		local row = Instance.new("Frame")
+		row.Name = "Row" .. i
+		row.BackgroundColor3 = VIOLET
+		row.BackgroundTransparency = 1
+		row.BorderSizePixel = 0
+		place(row, BW, BH, 16, 44 + (i - 1) * (RH + GAP), RWb, RH)
+		row.Parent = bsheet
+		roundOff(row, 8)
+		local pos = label(row, "Pos", RWb, RH, 8, 8, 52, 18, INK_DIM, Enum.TextXAlignment.Left, kit.FONT_BOLD)
+		local em = emblem(row, "Emblem", RWb, RH, 64, 2, 30, 1)
+		local nm = label(row, "Name", RWb, RH, 104, 8, RWb - 104 - 140, 18, INK, Enum.TextXAlignment.Left, kit.FONT_BOLD)
+		local rr = label(row, "RR", RWb, RH, RWb - 130, 8, 120, 18, INK, Enum.TextXAlignment.Right, kit.FONT_BOLD)
+		table.insert(self.boardRows, { row = row, pos = pos, emblem = em, name = nm, rr = rr })
+	end
+	local bprev = pillButton(bsheet, "Prev", BW, BH, BW / 2 - 70, BH - 38, 40, 28, "<")
+	local bnext = pillButton(bsheet, "Next", BW, BH, BW / 2 + 30, BH - 38, 40, 28, ">")
+	self.boardPage = label(bsheet, "Page", BW, BH, BW / 2 - 28, BH - 34, 56, 18, INK_DIM, Enum.TextXAlignment.Center, kit.FONT_BOLD)
+	self.boardEmpty = label(bsheet, "Empty", BW, BH, 0, BH / 2 - 9, BW, 18, INK_OFF, Enum.TextXAlignment.Center, kit.FONT_BOLD)
+	for _, d in bsheet:GetDescendants() do
+		if d:IsA("GuiObject") then
+			d.ZIndex = math.max(d.ZIndex, 11)
+		end
+	end
+	bprev.Activated:Connect(function()
+		self.bpage = math.max(1, self.bpage - 1)
+		self:paintBoard()
+	end)
+	bnext.Activated:Connect(function()
+		self.bpage += 1
+		self:paintBoard()
+	end)
+	self.boardSheet = bsheet
+	self.board = nil :: { any }?
+	self.bpage = 1
+
 	-- ------------------------------------------------------------ ladder
 	local LY, LH = 400, PH - 400 - 18
 	local ladder = slab(panel, "Ladder", PW, PH, 24, LY, PW - 48, LH)
@@ -437,6 +507,9 @@ function RankedUI.new(screen: ScreenGui, onLeaveBoard: (() -> ())?)
 			if self.friendSheet.Visible then
 				self:paintFriends()
 			end
+		elseif kind == "board" and type(payload) == "table" then
+			self.board = payload
+			self:paintBoard()
 		elseif kind == "toast" then
 			self:say(tostring(payload))
 		elseif kind == "invite" then
@@ -719,6 +792,46 @@ function RankedUI.paintFriends(self: any)
 	end
 end
 
+-- The server answers from a per-server cache that is at most a minute old.
+function RankedUI.openBoard(self: any)
+	self.friendSheet.Visible = false
+	self.boardSheet.Visible = true
+	self.bpage = 1
+	self.remote:FireServer("board")
+	self:paintBoard()
+end
+
+function RankedUI.closeBoard(self: any)
+	self.boardSheet.Visible = false
+end
+
+function RankedUI.paintBoard(self: any)
+	local list = self.board
+	local per = #self.boardRows
+	local pages = math.max(1, math.ceil((list and #list or 0) / per))
+	self.bpage = math.clamp(self.bpage, 1, pages)
+	setText(self.boardPage, string.format("%d/%d", self.bpage, pages))
+	setText(self.boardEmpty, if list == nil then "LOADING..." elseif #list == 0 then "NO RANKED PLAYERS YET" else "")
+	local me = Players.LocalPlayer
+	for i, row in self.boardRows do
+		local n = (self.bpage - 1) * per + i
+		local e = list and list[n]
+		if e then
+			row.row.Visible = true
+			local rank = Ranked.rankOfRR(e.rr)
+			setEmblem(row.emblem, rank)
+			setText(row.pos, "#" .. n)
+			row.pos.TextColor3 = n <= 3 and GOLD or INK_DIM
+			setText(row.name, tostring(e.name))
+			setText(row.rr, tostring(e.rr) .. " RR")
+			row.rr.TextColor3 = Ranked.rung(rank).color
+			row.row.BackgroundTransparency = e.id == me.UserId and 0.35 or 1
+		else
+			row.row.Visible = false
+		end
+	end
+end
+
 function RankedUI.open(self: any)
 	if self.isOpen then
 		return
@@ -739,6 +852,7 @@ function RankedUI.close(self: any)
 	end
 	self.isOpen = false
 	self.friendSheet.Visible = false
+	self.boardSheet.Visible = false
 	tween(self.shade, SHUT, { BackgroundTransparency = 1 })
 	tween(self.panelScale, SHUT, { Scale = 0.86 })
 	task.delay(0.12, function()

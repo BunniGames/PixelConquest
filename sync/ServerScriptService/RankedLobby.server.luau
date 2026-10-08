@@ -36,6 +36,8 @@ local HttpService = game:GetService("HttpService")
 local MemoryStoreService = game:GetService("MemoryStoreService")
 local TeleportService = game:GetService("TeleportService")
 local MessagingService = game:GetService("MessagingService")
+local DataStoreService = game:GetService("DataStoreService")
+local UserService = game:GetService("UserService")
 
 local Shared = ReplicatedStorage:WaitForChild("Conquest")
 local Ranked = require(Shared.Ranked)
@@ -292,6 +294,88 @@ end
 
 local function toast(player: Player, msg: string)
 	RankedRE:FireClient(player, "toast", msg)
+end
+
+-- ============================================================ leaderboard ==
+-- The top Ranked.BOARD_SIZE by RR, read from the board store at most once a
+-- BOARD_REFRESH per server and handed to whoever opens the board. Names come
+-- from UserService in one batch, cached for the server's life.
+
+local BOARD_REFRESH = 60
+local boardStore = DataStoreService:GetOrderedDataStore(Ranked.BOARD_STORE)
+local board: { { id: number, name: string, rr: number } }? = nil
+local boardAt = -math.huge
+local boardBusy = false
+local boardWaiting: { Player } = {}
+local boardNames: { [number]: string } = {}
+
+local function postRR(uid: number, rr: number)
+	task.spawn(function()
+		pcall(function()
+			boardStore:SetAsync(tostring(uid), math.max(0, math.floor(rr)))
+		end)
+	end)
+end
+
+local function sendBoard(player: Player)
+	if player.Parent then
+		RankedRE:FireClient(player, "board", board or {})
+	end
+end
+
+local function refreshBoard()
+	boardBusy = true
+	local ok, page = pcall(function()
+		-- minValue 1: a player who has never gained RR is not on the board.
+		return boardStore:GetSortedAsync(false, Ranked.BOARD_SIZE, 1):GetCurrentPage()
+	end)
+	if ok and type(page) == "table" then
+		local missing = {}
+		for _, item in page do
+			local id = tonumber(item.key)
+			if id and not boardNames[id] then
+				table.insert(missing, id)
+			end
+		end
+		if #missing > 0 then
+			local got, infos = pcall(function()
+				return UserService:GetUserInfosByUserIdsAsync(missing)
+			end)
+			if got and type(infos) == "table" then
+				for _, info in infos do
+					boardNames[info.Id] = info.DisplayName
+				end
+			end
+		end
+		local rows = {}
+		for _, item in page do
+			local id = tonumber(item.key)
+			if id then
+				table.insert(rows, { id = id, name = boardNames[id] or "?", rr = tonumber(item.value) or 0 })
+			end
+		end
+		board = rows
+		boardAt = os.clock()
+	else
+		warn("[Ranked] board read failed: " .. tostring(page))
+	end
+	boardBusy = false
+	local waiting = boardWaiting
+	boardWaiting = {}
+	for _, plr in waiting do
+		sendBoard(plr)
+	end
+end
+
+local function requestBoard(player: Player)
+	if os.clock() - boardAt < BOARD_REFRESH and board then
+		sendBoard(player)
+		return
+	end
+	table.insert(boardWaiting, player)
+	if not boardBusy then
+		task.spawn(refreshBoard)
+	end
 end
 
 -- ================================================================== queue ==
@@ -907,6 +991,9 @@ RankedRE.OnServerEvent:Connect(function(player: Player, action: any, arg: any)
 	if action == "view" then
 		push(player)
 
+	elseif action == "board" then
+		requestBoard(player)
+
 	elseif action == "queue" then
 		local q = Ranked.queue(arg)
 		if not q then
@@ -1110,6 +1197,11 @@ end
 
 Data.onReady(function(player: Player)
 	publish(player)
+	-- Onto the board with whatever RR they already hold.
+	local b = blockOf(player)
+	if b and b.games > 0 then
+		postRR(player.UserId, b.rr)
+	end
 	push(player)
 	joinOnArrival(player)
 end)
