@@ -39,7 +39,9 @@ end
 local pillButton, roundOff, grower, tween = kit.pillButton, kit.roundOff, kit.grower, kit.tween
 
 local REF_W, REF_H = kit.REF_W, kit.REF_H
-local PW, PH = 900, 560
+-- 1040 wide (owner, 2026-10-08: "make the ranked tab just a bit wider so
+-- everything fits"): ten ladder cells, Overlord included, were 85 px each.
+local PW, PH = 1040, 560
 local PX, PY = (REF_W - PW) / 2, (REF_H - PH) / 2 + 6
 
 local GOLD = kit.GOLD
