@@ -95,6 +95,7 @@ local PIX: { [string]: { number } } = {
 	["O"] = { 255, 146, 48 },
 	["L"] = { 255, 226, 140 },
 	["G"] = { 178, 186, 204 },
+	["V"] = { 111, 217, 138 },
 }
 local HEART = {
 	"................",
@@ -169,6 +170,25 @@ local LOCK = {
 	"................",
 }
 
+local CHECK = {
+	"................",
+	"................",
+	"..............kk",
+	".............kVk",
+	"............kVVk",
+	"...........kVVk.",
+	"..kk......kVVk..",
+	".kVVk....kVVk...",
+	".kVVVk..kVVk....",
+	"..kVVVkkVVk.....",
+	"...kVVVVVk......",
+	"....kVVVk.......",
+	".....kVk........",
+	"......k.........",
+	"................",
+	"................",
+}
+
 local spriteCache: { [any]: Content } = {}
 local function spriteContent(art: { string }): Content
 	local hit = spriteCache[art]
@@ -216,6 +236,26 @@ local function comma(n: number): string
 		s = string.sub(s, 1, -4)
 	end
 	return s .. out
+end
+
+-- 500, 1.5K, 25K: what fits on a badge.
+local function short(n: number): string
+	if n < 1000 then
+		return tostring(math.floor(n))
+	end
+	local k = n / 1000
+	return (if k == math.floor(k) then tostring(math.floor(k)) else string.format("%.1f", k)) .. "K"
+end
+
+-- A number in the kit's face, stroked, in a corner of an icon box.
+local function badge(box: Instance, text: string, color: Color3, top: boolean?)
+	local b = label(box, "Badge", 100, 100, 0, if top then 0 else 76, 100, 24, color, Enum.TextXAlignment.Right, kit.FONT_KIT)
+	setText(b, text)
+	b.ZIndex = 4
+	local s = Instance.new("UIStroke")
+	s.Thickness = 2
+	s.Color = Color3.fromRGB(20, 22, 28)
+	s.Parent = b
 end
 
 local function grantWords(g: EventPass.Grant): string
@@ -293,13 +333,11 @@ local function iconInto(box: GuiObject, g: EventPass.Grant)
 		img.Size = UDim2.fromScale(0.86, 0.86)
 		img.Parent = box
 		Icons.resample(img)
-		local tag = label(box, "Tag", 100, 100, 50, 74, 50, 24, Color3.fromRGB(111, 217, 138), Enum.TextXAlignment.Right, kit.FONT_KIT)
-		setText(tag, "15:00")
-		tag.ZIndex = 3
-		local s = Instance.new("UIStroke")
-		s.Thickness = 2
-		s.Color = Color3.fromRGB(20, 22, 28)
-		s.Parent = tag
+		-- The clock is what says "a boost you start yourself".
+		badge(box, "15:00", Color3.fromRGB(111, 217, 138))
+		if (g.amount or 1) > 1 then
+			badge(box, "x" .. math.floor(g.amount :: number), kit.INK, true)
+		end
 		return
 	end
 	local art = if g.kind == "revive" then HEART elseif g.kind == "rename" then PENCIL elseif g.kind == "flag" then FLAG else nil
@@ -309,6 +347,9 @@ local function iconInto(box: GuiObject, g: EventPass.Grant)
 		img.AnchorPoint = Vector2.new(0.5, 0.5)
 		img.Position = UDim2.fromScale(0.5, 0.5)
 		img.Size = UDim2.fromScale(0.78, 0.78)
+		if (g.amount or 1) > 1 then
+			badge(box, "x" .. math.floor(g.amount :: number), kit.INK)
+		end
 		return
 	end
 	-- Money, the 3x round, and anything unknown: the banknote.
@@ -317,13 +358,12 @@ local function iconInto(box: GuiObject, g: EventPass.Grant)
 	note.Position = UDim2.fromScale(0.5, 0.5)
 	note.Size = UDim2.fromScale(0.86, 0.6)
 	if g.kind == "money3x" then
-		local tag = label(box, "Tag", 100, 100, 46, 0, 54, 34, kit.GOLD, Enum.TextXAlignment.Right, kit.FONT_KIT)
-		setText(tag, "3X")
-		tag.ZIndex = 3
-		local s = Instance.new("UIStroke")
-		s.Thickness = 2
-		s.Color = Color3.fromRGB(20, 22, 28)
-		s.Parent = tag
+		badge(box, "3X", kit.GOLD, true)
+		if (g.amount or 1) > 1 then
+			badge(box, "x" .. math.floor(g.amount :: number), kit.INK)
+		end
+	elseif g.kind == "money" then
+		badge(box, short(g.amount or 0), kit.GOLD)
 	end
 end
 
@@ -353,35 +393,56 @@ local function buildSlot(self: any, card: Instance, tier: number, premium: boole
 	stroke.Parent = group
 	local scale = grower(group)
 
-	local iconSide = if premium then 92 else 56
+	-- PICTURES, NOT WORDS (owner, 2026-10-09: "dont make it so much text, make
+	-- it intuitive"). The reward is its icon and a number; its name shows on
+	-- hover and on a tap (EventPassUI.hint / press).
+	local iconSide = if premium then 112 else 62
 	local box = Instance.new("Frame")
 	box.Name = "Icon"
 	box.BackgroundTransparency = 1
-	place(box, SLOT_W, h, (SLOT_W - iconSide) / 2, if premium then 12 else 8, iconSide, iconSide)
+	place(box, SLOT_W, h, (SLOT_W - iconSide) / 2, if premium then 30 else 8, iconSide, iconSide)
 	box.Parent = group
 	local square = Instance.new("UIAspectRatioConstraint")
 	square.AspectRatio = 1
 	square.DominantAxis = Enum.DominantAxis.Height
 	square.Parent = box
-	iconInto(box, if extra then grants[2] else grants[1])
-
-	local nameY, nameH = if premium then 112 else 68, if premium then 50 else 24
-	local name = label(group, "Name", SLOT_W, h, 4, nameY, SLOT_W - 8, nameH, kit.INK, Enum.TextXAlignment.Center, kit.FONT_BOLD)
-	name.TextWrapped = true
-	local cap = name:FindFirstChildOfClass("UITextSizeConstraint")
-	if cap then
-		cap.MaxTextSize = if premium then 15 else 13
+	local lead = if extra then grants[2] else grants[1]
+	iconInto(box, lead)
+	-- A SECOND GRANT IS A "+" BADGE on the first: the Money riding with a skin,
+	-- or under a free tier's extra.
+	local other = if extra then grants[1] elseif #grants > 1 then grants[2] else nil
+	if other ~= nil and other.kind == "money" then
+		badge(box, "+" .. short(other.amount or 0), kit.GOLD)
 	end
-	setText(name, if extra then grantWords(grants[2]) .. "\n+ " .. grantWords(grants[1]) else rewardWords(grants))
+	local words = if extra then grantWords(grants[2]) .. "  +  " .. grantWords(grants[1]) else (string.gsub(rewardWords(grants), "\n", " "))
 
-	-- The state line: CLAIM when it can be taken, a tick once it has been.
-	local stateY = if premium then 170 else 68
-	local state = label(group, "State", SLOT_W, h, 4, stateY, SLOT_W - 8, if premium then 34 else 24, kit.GAIN, Enum.TextXAlignment.Center, kit.FONT_BOLD)
-	state.ZIndex = 4
-	local stateCap = state:FindFirstChildOfClass("UITextSizeConstraint")
-	if stateCap then
-		stateCap.MaxTextSize = if premium then 18 else 15
-	end
+	-- CLAIM: a green chip under the icon while it can be taken.
+	local chipW, chipH = SLOT_W - 24, if premium then 26 else 22
+	local chip = Instance.new("Frame")
+	chip.Name = "Claim"
+	chip.BackgroundColor3 = GREEN_FILL
+	chip.BorderSizePixel = 0
+	place(chip, SLOT_W, h, 12, h - chipH - 8, chipW, chipH)
+	chip.ZIndex = 4
+	chip.Visible = false
+	chip.Parent = group
+	roundOff(chip, 8)
+	local cs = Instance.new("UIStroke")
+	cs.Color = kit.GAIN
+	cs.Thickness = 1.4
+	cs.Parent = chip
+	local chipText = label(chip, "Caption", chipW, chipH, 0, 2, chipW, chipH - 4, kit.INK, Enum.TextXAlignment.Center, kit.FONT_BOLD)
+	setText(chipText, "CLAIM")
+	chipText.ZIndex = 5
+
+	-- TAKEN: a green tick over the icon -- on the CARD, not in the slot's group,
+	-- so it stays bright while the slot behind it dims.
+	local tickSide = iconSide * 0.75
+	local check = pixelLabel(card, "Check")
+	check.ImageContent = spriteContent(CHECK)
+	place(check, CW, CH, SLOT_X + (SLOT_W - tickSide) / 2, y + (if premium then 30 else 8) + (iconSide - tickSide) / 2, tickSide, tickSide)
+	check.ZIndex = 7
+	check.Visible = false
 
 	-- The premium row's padlock, over the icon, while premium is locked.
 	local lock: ImageLabel? = nil
@@ -404,15 +465,17 @@ local function buildSlot(self: any, card: Instance, tier: number, premium: boole
 
 	local slot = {
 		tier = tier, premium = premium, group = group, stroke = stroke, scale = scale,
-		name = name, state = state, lock = lock, class = class, hover = false,
+		chip = chip, check = check, words = words, lock = lock, class = class, hover = false,
 	}
 	hit.MouseEnter:Connect(function()
 		slot.hover = true
 		tween(scale, kit.HOVER_IN, { Scale = 1.04 })
+		EventPassUI.hint(self, words)
 	end)
 	hit.MouseLeave:Connect(function()
 		slot.hover = false
 		tween(scale, kit.HOVER_OUT, { Scale = 1 })
+		EventPassUI.hint(self, nil)
 	end)
 	hit.MouseButton1Down:Connect(function()
 		tween(scale, kit.PRESS_IN, { Scale = kit.PRESS_SCALE })
@@ -508,14 +571,27 @@ function EventPassUI.new(parent: Instance): any
 	end)
 
 	-- ------------------------------------------------------- progress --
-	self.tierText = label(panel, "Tier", PW, PH, 24, 74, 180, 34, kit.GOLD, Enum.TextXAlignment.Left, kit.FONT_BOLD)
+	-- THE TIER YOU ARE ON, the bar to the next, and how long is left. No
+	-- words the shapes already say.
+	local tb = Instance.new("Frame")
+	tb.Name = "TierBadge"
+	tb.BackgroundColor3 = ORANGE_DEEP
+	tb.BorderSizePixel = 0
+	place(tb, PW, PH, 24, 70, 92, 50)
+	tb.Parent = panel
+	roundOff(tb, 10)
+	local tbs = Instance.new("UIStroke")
+	tbs.Color = ORANGE
+	tbs.Thickness = 1.6
+	tbs.Parent = tb
+	self.tierText = label(tb, "Tier", 92, 50, 0, 6, 92, 38, kit.INK, Enum.TextXAlignment.Center, kit.FONT_KIT)
 	local bar = Instance.new("Frame")
 	bar.Name = "Bar"
 	bar.BackgroundColor3 = SLOT_FILL
 	bar.BorderSizePixel = 0
-	place(bar, PW, PH, 210, 82, 700, 22)
+	place(bar, PW, PH, 132, 80, 820, 30)
 	bar.Parent = panel
-	roundOff(bar, 11)
+	roundOff(bar, 15)
 	local bs = Instance.new("UIStroke")
 	bs.Color = kit.LINE
 	bs.Thickness = 1.4
@@ -526,12 +602,28 @@ function EventPassUI.new(parent: Instance): any
 	fill.BorderSizePixel = 0
 	fill.Size = UDim2.fromScale(0, 1)
 	fill.Parent = bar
-	roundOff(fill, 11)
+	roundOff(fill, 15)
 	self.barFill = fill
-	self.xpText = label(panel, "Xp", PW, PH, 920, 80, PW - 24 - 920, 26, kit.INK, Enum.TextXAlignment.Right, kit.FONT_BOLD)
-	self.hint = label(panel, "Hint", PW, PH, 210, 110, 460, 16, kit.INK_DIM, Enum.TextXAlignment.Left, kit.FONT_BOLD)
-	setText(self.hint, "EVERY MATCH EARNS XP  -  HORDE PAYS DOUBLE")
-	self.clock = label(panel, "Clock", PW, PH, 700, 110, 210, 16, ORANGE, Enum.TextXAlignment.Right, kit.FONT_BOLD)
+	self.xpText = label(bar, "Xp", 820, 30, 0, 5, 820, 20, kit.INK, Enum.TextXAlignment.Center, kit.FONT_BOLD)
+	self.xpText.ZIndex = 3
+	local xs = Instance.new("UIStroke")
+	xs.Thickness = 1.5
+	xs.Color = Color3.fromRGB(20, 22, 28)
+	xs.Parent = self.xpText
+	self.clock = label(panel, "Clock", PW, PH, 1000, 83, PW - 24 - 1000, 24, ORANGE, Enum.TextXAlignment.Left, kit.FONT_BOLD)
+	do
+		local images = StarterGui:FindFirstChild("Images")
+		local glass = images and images:FindFirstChild("Hourglass")
+		if glass and glass:IsA("ImageLabel") then
+			local g = Instance.new("ImageLabel")
+			g.Name = "Hourglass"
+			g.BackgroundTransparency = 1
+			g.Image = glass.Image
+			g.ScaleType = Enum.ScaleType.Fit
+			place(g, PW, PH, 966, 81, 28, 28)
+			g.Parent = panel
+		end
+	end
 
 	-- ------------------------------------------------------ row labels --
 	local freeLbl = label(panel, "FreeRow", PW, PH, LABEL_X, TRACK_Y + 4 + FREE_Y + 36, LABEL_W, 22, kit.INK_DIM, Enum.TextXAlignment.Center, kit.FONT_BOLD)
@@ -679,29 +771,22 @@ local function paintSlot(self: any, slot: any, reached: number)
 	if slot.lock then
 		slot.lock.Visible = locked
 	end
+	slot.chip.Visible = slot.ready
+	slot.check.Visible = taken
 	if taken then
-		slot.group.GroupTransparency = 0.45
-		setText(slot.state, "CLAIMED")
-		slot.state.TextColor3 = kit.GAIN
+		slot.group.GroupTransparency = 0.6
 		slot.stroke.Color = slot.class.edge
 		slot.stroke.Thickness = slot.class.thick
 	elseif slot.ready then
 		slot.group.GroupTransparency = 0
-		setText(slot.state, "CLAIM")
-		slot.state.TextColor3 = kit.GAIN
 		slot.stroke.Color = kit.GAIN
 		slot.stroke.Thickness = slot.class.thick + 0.8
 	else
 		-- Not reached, or premium not unlocked: dimmed, the reward still
 		-- legible -- what it is is the reason to keep playing.
-		slot.group.GroupTransparency = if open and locked then 0.15 else 0.4
-		setText(slot.state, "")
+		slot.group.GroupTransparency = if open and locked then 0.15 else 0.45
 		slot.stroke.Color = slot.class.edge
 		slot.stroke.Thickness = slot.class.thick
-	end
-	-- The free slot's name and CLAIM share a line; CLAIM wins while it shows.
-	if not slot.premium then
-		slot.name.Visible = slot.state.Text == ""
 	end
 end
 
@@ -713,11 +798,11 @@ function EventPassUI.paint(self: any)
 		c.num.TextTransparency = if c.tier <= reached then 0 else 0.4
 	end
 	if reached >= EventPass.COUNT then
-		setText(self.tierText, "TIER " .. EventPass.COUNT)
+		setText(self.tierText, tostring(EventPass.COUNT))
 		setText(self.xpText, "COMPLETE")
 		tween(self.barFill, BAR_FILL, { Size = UDim2.fromScale(1, 1) })
 	else
-		setText(self.tierText, "TIER " .. reached)
+		setText(self.tierText, tostring(reached))
 		setText(self.xpText, comma(into) .. " / " .. comma(need) .. " XP")
 		tween(self.barFill, BAR_FILL, { Size = UDim2.fromScale(math.clamp(into / math.max(1, need), 0, 1), 1) })
 	end
@@ -803,6 +888,15 @@ function EventPassUI.say(self: any, text: string)
 	self.msgUntil = os.clock() + 4
 end
 
+-- The hovered reward's name on the message line, while the cursor is on it.
+-- A timed message (a refusal, a claim) is not talked over.
+function EventPassUI.hint(self: any, text: string?)
+	if self.msgUntil > 0 then
+		return
+	end
+	setText(self.message, text or "")
+end
+
 -- ---------------------------------------------------------------- presses --
 
 function EventPassUI.press(self: any, slot: any)
@@ -815,13 +909,13 @@ function EventPassUI.press(self: any, slot: any)
 	end
 	if slot.premium and not self.premium then
 		Sfx.play("Deny")
-		EventPassUI.say(self, "UNLOCK PREMIUM TO GET THIS")
+		EventPassUI.say(self, slot.words .. "  -  UNLOCK PREMIUM")
 		return
 	end
 	local reached = EventPass.progress(self.xp)
 	if slot.tier > reached then
 		Sfx.play("Deny")
-		EventPassUI.say(self, comma(EventPass.xpTo(slot.tier) - self.xp) .. " MORE XP TO REACH TIER " .. slot.tier)
+		EventPassUI.say(self, slot.words .. "  -  TIER " .. slot.tier)
 		return
 	end
 	-- NO SOUND YET: the cheer belongs to the grant landing (setState).
@@ -924,11 +1018,11 @@ end
 function EventPassUI.tickClock(self: any)
 	local left = EventPass.ENDS - os.time()
 	if left <= 0 then
-		setText(self.clock, "EVENT ENDED")
+		setText(self.clock, "ENDED")
 		return
 	end
 	local d, h, m = left // 86400, (left % 86400) // 3600, (left % 3600) // 60
-	setText(self.clock, if d > 0 then string.format("ENDS IN %dD %dH", d, h) else string.format("ENDS IN %dH %dM", h, m))
+	setText(self.clock, if d > 0 then string.format("%dD %dH", d, h) else string.format("%dH %dM", h, m))
 end
 
 function EventPassUI.step(self: any)
