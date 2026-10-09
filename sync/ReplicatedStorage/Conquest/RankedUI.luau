@@ -19,6 +19,7 @@ local LobbyUI = require(Shared.LobbyUI)
 local Ranked = require(Shared.Ranked)
 local RankEmblems = require(Shared.RankEmblems)
 local Patterns = require(Shared.Patterns)
+local MoneyNote = require(Shared.MoneyNote)
 
 local kit = LobbyUI.kit
 local place, setText = kit.place, kit.setText
@@ -414,6 +415,7 @@ function RankedUI.new(screen: ScreenGui, onLeaveBoard: (() -> ())?)
 			skin.ImageContent = Content.fromObject(skinImage)
 		end
 		local cash = label(row, "Cash", RWb, RH, PX + 32, 8, 120, 18, kit.GAIN, Enum.TextXAlignment.Left, kit.FONT_BOLD)
+		MoneyNote.attach(cash)
 		local rr = label(row, "RR", RWb, RH, RWb - 130, 8, 120, 18, INK, Enum.TextXAlignment.Right, kit.FONT_BOLD)
 		table.insert(self.boardRows, { row = row, pos = pos, emblem = em, name = nm, skin = skin, cash = cash, rr = rr })
 	end
@@ -935,7 +937,7 @@ function RankedUI.paintBoard(self: any)
 			setText(row.name, tostring(e.name))
 			local money, skin = Ranked.seasonPrize(n)
 			row.skin.Visible = skin
-			setText(row.cash, money > 0 and ("$" .. short(money)) or "")
+			setText(row.cash, money > 0 and short(money) or "")
 			setText(row.rr, tostring(e.rr) .. " RR")
 			row.rr.TextColor3 = Ranked.rung(rank).color
 			row.row.BackgroundTransparency = e.id == me.UserId and 0.35 or 1

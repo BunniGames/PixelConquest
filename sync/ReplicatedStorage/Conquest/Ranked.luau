@@ -302,11 +302,14 @@ Ranked.SEASON_MIN_GAMES = 5
 -- 1..SEASON_SKIN_TOP: the skin and SEASON_MONEY. Below that the cash steps
 -- down evenly from SEASON_MONEY_HI at the next place to SEASON_MONEY_LO at
 -- SEASON_TOP, rounded to SEASON_MONEY_ROUND (about 900 a place).
-Ranked.SEASON_SKIN_TOP = 10
+-- ONLY THE TOP 5 GET THE SKIN (owner, 2026-10-08), but 6..SEASON_FLAT_TOP
+-- still take SEASON_MONEY.
+Ranked.SEASON_SKIN_TOP = 5
+Ranked.SEASON_FLAT_TOP = 10
 Ranked.SEASON_MONEY = 100000
 -- THE PODIUM (owner, 2026-10-08: "1 Million for #1. 500k for number 2.
 -- 250k then 200k then 150k then 100k"). Places past this list and up to
--- SEASON_SKIN_TOP get SEASON_MONEY.
+-- SEASON_FLAT_TOP get SEASON_MONEY.
 Ranked.SEASON_MONEY_TOP = { 1000000, 500000, 250000, 200000, 150000 }
 Ranked.SEASON_MONEY_HI = 90000
 Ranked.SEASON_MONEY_LO = 10000
@@ -317,10 +320,11 @@ function Ranked.seasonPrize(pos: number): (number, boolean)
 	if pos < 1 or pos > Ranked.SEASON_TOP then
 		return 0, false
 	end
-	if pos <= Ranked.SEASON_SKIN_TOP then
-		return Ranked.SEASON_MONEY_TOP[pos] or Ranked.SEASON_MONEY, true
+	local skin = pos <= Ranked.SEASON_SKIN_TOP
+	if pos <= Ranked.SEASON_FLAT_TOP then
+		return Ranked.SEASON_MONEY_TOP[pos] or Ranked.SEASON_MONEY, skin
 	end
-	local first, last = Ranked.SEASON_SKIN_TOP + 1, Ranked.SEASON_TOP
+	local first, last = Ranked.SEASON_FLAT_TOP + 1, Ranked.SEASON_TOP
 	local t = if last > first then (pos - first) / (last - first) else 0
 	local cash = Ranked.SEASON_MONEY_HI + (Ranked.SEASON_MONEY_LO - Ranked.SEASON_MONEY_HI) * t
 	local r = Ranked.SEASON_MONEY_ROUND
