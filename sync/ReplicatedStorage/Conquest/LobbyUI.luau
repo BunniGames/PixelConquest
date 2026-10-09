@@ -1158,6 +1158,27 @@ function LobbyUI.capStroke(t: TextLabel)
 	s.Parent = t
 end
 
+-- EVERY WORD ON THE PAGE IS OUTLINED (owner, 2026-10-08: "can you add ui
+-- strokes to everything else"): the caption outline on every label under
+-- `root` that has none yet. Kit shadows ("...Sh") are skipped -- they ARE
+-- the outline of the label above them. DARK words (JOIN, the mode pill) sit
+-- on bright pills, where a black outline just fattens them into blobs: they
+-- get a thin soft LIGHT edge instead.
+function LobbyUI.strokeAll(root: Instance)
+	for _, d in root:GetDescendants() do
+		if (d:IsA("TextLabel") or d:IsA("TextButton")) and not d:FindFirstChildOfClass("UIStroke") and string.sub(d.Name, -2) ~= "Sh" then
+			LobbyUI.capStroke(d :: TextLabel)
+			local c = d.TextColor3
+			if 0.3 * c.R + 0.59 * c.G + 0.11 * c.B < 0.35 then
+				local s = d:FindFirstChildOfClass("UIStroke") :: UIStroke
+				s.Color = Color3.new(1, 1, 1)
+				s.Thickness = 1
+				s.Transparency = 0.6
+			end
+		end
+	end
+end
+
 local function buildCard(root: Frame, index: number, x: number, y: number, w: number, h: number): any
 	local slot = Matchmaker.SLOTS[index]
 
@@ -3396,6 +3417,8 @@ function LobbyUI.new(parent: Instance, myUserId: number): LobbyUI
 	-- Only ever visible while a toast is up; the reference has nothing here.
 	self.toastLabel = label(root, "Toast", REF_W, REF_H, PAGE_M, BTN_Y - 22, CONTENT_W, 16, GOLD)
 	self.toastUntil = 0
+	-- Before the panels: this is the page's own words, not the sheets'.
+	LobbyUI.strokeAll(root)
 
 	-- LAST, so they are the last siblings in `root` and therefore already above
 	-- everything even before their ZIndex is considered. The room panel goes
