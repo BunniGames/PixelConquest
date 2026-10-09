@@ -57,23 +57,35 @@ EventPass.NAME = "HALLOWEEN EVENT PASS"
 EventPass.ENDS = 1793692800
 
 -- XP ------------------------------------------------------------------------
--- Every settled round pays: a flat part for playing, a part for how high you
--- finished, and a bonus for the win. 25 at the bottom of a lost round, 100 for
--- a win. A round you LEAVE pays half (the money path's `partial`), and HORDE
--- -- the Halloween mode -- pays double.
-EventPass.XP_PLAY = 25
-EventPass.XP_PLACE = 35
-EventPass.XP_WIN = 40
+-- PAID BY THE MINUTE, SO THE PASS TAKES ABOUT 16 HOURS OF PLAY (owner,
+-- 2026-10-09: "make it take about 16 hours of playtime to finish the pass").
+-- A flat amount per round could not do that: measured seat lifetimes run 4 to
+-- 63 minutes (MONEYBALANCE.txt section 8), so per-round XP would finish the
+-- pass in ~5 hours on US duo and ~40 on Venice. Money solved the same problem
+-- the same way.
+--
+--   xp = (minutes survived + CYCLE_MINUTES) x XP_PER_MINUTE
+--        x (1 + PLACE_BONUS x share-of-field-beaten + WIN_BONUS if won)
+--
+-- CYCLE_MINUTES is the lobby/load gap every round costs in real time, so short
+-- rounds and long ones earn alike per hour. With a typical multiplier of ~1.25
+-- that is ~220 XP an hour, 3,600 XP in 16 hours: 14 to 18 across every
+-- measured map at a 1.5-3 minute real gap. A round you LEAVE pays its minutes
+-- without the place/win bonus; HORDE -- the Halloween mode -- pays double.
+EventPass.XP_PER_MINUTE = 2.9
+EventPass.CYCLE_MINUTES = 2.5
+EventPass.PLACE_BONUS = 0.3
+EventPass.WIN_BONUS = 0.25
 EventPass.HORDE_MULT = 2
 
-function EventPass.xpFor(place: number, field: number, won: boolean, partial: boolean?, horde: boolean?): number
+function EventPass.xpFor(place: number, field: number, won: boolean, partial: boolean?, horde: boolean?, minutes: number?): number
 	local f = math.max(1, math.floor(field))
 	local p = math.clamp(math.floor(place), 1, f)
 	-- Share of the field you finished above, 1 for first, 0 for last.
 	local above = if f <= 1 then 1 else (f - p) / (f - 1)
-	local xp = EventPass.XP_PLAY + EventPass.XP_PLACE * above + (if won then EventPass.XP_WIN else 0)
-	if partial then
-		xp *= 0.5
+	local xp = (math.max(0, minutes or 0) + EventPass.CYCLE_MINUTES) * EventPass.XP_PER_MINUTE
+	if not partial then
+		xp *= 1 + EventPass.PLACE_BONUS * above + (if won then EventPass.WIN_BONUS else 0)
 	end
 	if horde then
 		xp *= EventPass.HORDE_MULT
@@ -86,7 +98,7 @@ export type Grant = { kind: string, amount: number?, key: string? }
 export type Tier = { cost: number, free: { Grant }, premium: { Grant } }
 
 -- What each tier COSTS in XP, by decade: 80 / 120 / 160, 3,600 in all -- about
--- 70 rounds at a typical 50 XP, a little over three weeks of regular play.
+-- 16 hours of play at the rates above.
 local function cost(tier: number): number
 	if tier <= 10 then
 		return 80

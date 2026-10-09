@@ -714,7 +714,7 @@ local function settleMoney(plr: Player, partial: boolean?)
 	})
 	-- THE EVENT PASS'S XP (2026-10-09), behind the same once-per-player guard
 	-- as the money and banked on the same profile; the flush below carries it.
-	local passXp = Data.addEventXp(plr, stats.place, stats.field, stats.won, partial)
+	local passXp = Data.addEventXp(plr, stats.place, stats.field, stats.won, partial, stats.minutes)
 	if award.total <= 0 then
 		return
 	end

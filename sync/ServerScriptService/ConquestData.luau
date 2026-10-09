@@ -1079,13 +1079,13 @@ end
 
 -- One settled round's XP. Returns what was banked: 0 once the event is over,
 -- or for a profile that failed to load (write nothing, per the header).
-function Data.addEventXp(player: Player, place: number, field: number, won: boolean, partial: boolean?): number
+function Data.addEventXp(player: Player, place: number, field: number, won: boolean, partial: boolean?, minutes: number?): number
 	local p = profiles[player]
 	if p == nil or not EventPass.isLive() then
 		return 0
 	end
 	local horde = ReplicatedStorage:GetAttribute("ConquestHorde")
-	local xp = EventPass.xpFor(place, field, won, partial, horde ~= nil and horde ~= false)
+	local xp = EventPass.xpFor(place, field, won, partial, horde ~= nil and horde ~= false, minutes)
 	local b = passBlock(p)
 	b.xp += xp
 	dirty[player] = true
