@@ -780,6 +780,10 @@ function EventPassUI.new(parent: Instance): any
 		end
 	end)
 
+	-- EVERY WORD OUTLINED, as on the lobby page (owner, 2026-10-09: "add a ui
+	-- stroke to everything here") -- the page's own helper, so the two match.
+	LobbyUI.strokeAll(panel)
+
 	EventPassUI.paint(self)
 	return self
 end
