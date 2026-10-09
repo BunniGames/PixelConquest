@@ -54,6 +54,8 @@ local Patterns = require(game.ReplicatedStorage:WaitForChild("Conquest"):WaitFor
 local Config = require(game.ReplicatedStorage:WaitForChild("Conquest"):WaitForChild("Config"))
 local Data = require(script.Parent:WaitForChild("ConquestData"))
 local Analytics = require(script.Parent:WaitForChild("ConquestAnalytics"))
+-- The Halloween event pass's product keys and its skip arithmetic.
+local EventPass = require(game.ReplicatedStorage:WaitForChild("Conquest"):WaitForChild("EventPass"))
 
 local Monetization = {}
 
@@ -238,6 +240,28 @@ Monetization.setGrant("FLAG", function(_player, profile, entry)
 	countPurchase(profile, entry)
 	return true
 end)
+
+-- ---- 2026-10-09: the Halloween event pass ----------------------------------
+--
+-- PREMIUM IS A FLAG on this event's block, not a counter: a second receipt
+-- sets true to true and is acknowledged (the sheet hides the button once it is
+-- owned). It opens every premium tier already reached as well as the rest.
+-- A SKIP moves the XP that many tiers along (EventPass.skip), wherever the
+-- receipt lands; one past the end of the track caps there, and the sheet only
+-- offers a skip that fits in what is left.
+Monetization.setGrant(EventPass.PREMIUM_PRODUCT, function(_player, profile, entry)
+	Data.eventBlock(profile).premium = true
+	countPurchase(profile, entry)
+	return true
+end)
+for _, skip in EventPass.SKIPS do
+	Monetization.setGrant(skip.key, function(_player, profile, entry)
+		local b = Data.eventBlock(profile)
+		b.xp = EventPass.skip(b.xp, skip.tiers)
+		countPurchase(profile, entry)
+		return true
+	end)
+end
 
 -- BOOSTED SKINS: one grant per def that names a product. Own it AND wear it,
 -- in that order, for the same reason Data.buyPattern does -- a purchase that

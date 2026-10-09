@@ -669,6 +669,17 @@ function PatternShop.paintCard(self: any, entry: any)
 		entry.state.TextColor3 = tint
 		entry.swatch.ImageTransparency = 0
 		entry.name.TextColor3 = kit.INK
+	elseif st.event then
+		-- AN EVENT PASS REWARD (2026-10-09): names its door, in the pass's
+		-- orange, swatch at full strength like the season card above.
+		local tint = Patterns.tier(def.tier).color
+		entry.stroke.Color = tint
+		entry.stroke.Thickness = 2.2
+		entry.stroke.Transparency = 0.1
+		setText(entry.state, "EVENT PASS")
+		entry.state.TextColor3 = tint
+		entry.swatch.ImageTransparency = 0
+		entry.name.TextColor3 = kit.INK
 	elseif st.vip then
 		-- COMES WITH THE PASS. An owner never reaches this branch: the grant
 		-- writes the pattern into the profile, so they arrive at `st.owned`
@@ -825,6 +836,12 @@ function PatternShop.press(self: any, entry: any)
 	if st.season then
 		Sfx.play("Deny")
 		PatternShop.say(self, string.upper(def.name) .. " GOES TO THE TOP 5 OF EACH RANKED SEASON.")
+		return
+	end
+
+	if st.event then
+		Sfx.play("Deny")
+		PatternShop.say(self, string.upper(def.name) .. " COMES FROM THE HALLOWEEN EVENT PASS.")
 		return
 	end
 

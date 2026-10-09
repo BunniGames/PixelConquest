@@ -728,6 +728,42 @@ local DEV_PRODUCTS: { [string]: Entry } = {
 		-- Display only; the site is the authority. Read off the listing 2026-09-22.
 		robux = 9,
 	},
+	-- THE HALLOWEEN EVENT PASS (2026-10-09, ids from the owner's dashboard
+	-- screenshot). EVENT_PASS opens the premium track for this event; the
+	-- three skips move the account 1 / 3 / 5 tiers along. Granted in
+	-- ConquestMonetization off EventPass.PREMIUM_PRODUCT / EventPass.SKIPS.
+	EVENT_PASS = {
+		key = "EVENT_PASS",
+		kind = "product",
+		id = 3717392584,
+		name = "Halloween Pass",
+		blurb = "Unlock the premium rewards on the Halloween Event Pass.",
+		robux = 199,
+	},
+	EVENT_SKIP1 = {
+		key = "EVENT_SKIP1",
+		kind = "product",
+		id = 3717392244,
+		name = "+1 Tier",
+		blurb = "Skip one tier on the Halloween Event Pass.",
+		robux = 79,
+	},
+	EVENT_SKIP3 = {
+		key = "EVENT_SKIP3",
+		kind = "product",
+		id = 3717392339,
+		name = "+3 Tier",
+		blurb = "Skip three tiers on the Halloween Event Pass.",
+		robux = 149,
+	},
+	EVENT_SKIP5 = {
+		key = "EVENT_SKIP5",
+		kind = "product",
+		id = 3717392407,
+		name = "+5 Tier",
+		blurb = "Skip five tiers on the Halloween Event Pass.",
+		robux = 239,
+	},
 }
 
 -- A FIXED LIST, which is the entire point of it. A chosen title costs nothing

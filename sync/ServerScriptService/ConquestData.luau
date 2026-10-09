@@ -51,6 +51,10 @@ local Data = {}
 -- pattern is secret; what has to be authoritative is who OWNS one, and that
 -- lives in the profile below.
 local Patterns = require(ReplicatedStorage:WaitForChild("Conquest"):WaitForChild("Patterns"))
+-- The event pass's tiers and XP rules, and the pass catalogue its great tiers
+-- grant from (2026-10-09; see the event pass section below).
+local EventPass = require(ReplicatedStorage.Conquest:WaitForChild("EventPass"))
+local Products = require(ReplicatedStorage.Conquest:WaitForChild("Products"))
 
 -- THE VERSION LIVES IN THE STORE NAME, which is the same migration idiom
 -- Matchmaker uses for its MemoryStore records: a breaking schema change bumps
@@ -202,6 +206,10 @@ local function defaultProfile(): any
 		-- special-cased the way tutorialSeen is: an account that existed before
 		-- the sheet did has not claimed it, and should be able to.
 		freeReward = false,
+		-- THE EVENT PASS (2026-10-09): { id, xp, premium, claimed = { ["f7"|"p7"] = true } },
+		-- keyed by EventPass.ID so the next event starts every account from
+		-- nothing. Read and written only through the event pass section below.
+		eventPass = {},
 		-- THE TUTORIAL FOUR (2026-09-12), keyed by product key: how many of
 		-- each are in hand. Banked by a grant in ConquestMonetization, spent
 		-- by ConquestServer.redeemBoost, and read through Data.boostTokens /
@@ -1022,6 +1030,149 @@ function Data.unclaimFreeReward(player: Player, money: number, passKey: string, 
 		p.moneyPasses[passKey] = nil
 	end
 	dirty[player] = true
+end
+
+-- ============================================================ event pass ==
+--
+-- THE HALLOWEEN EVENT PASS (2026-10-09). XP is banked by the MATCH server
+-- (addEventXp, from ConquestServer.settleMoney, the moment a round's result is
+-- final); tiers are claimed in the LOBBY (claimEventTier, from
+-- MatchmakerServer). The tiers and the XP rules are EventPass's.
+
+-- The block for THIS event, made fresh when the profile holds none or holds
+-- the last event's.
+local function passBlock(p: any): any
+	local b = p.eventPass
+	if type(b) ~= "table" or b.id ~= EventPass.ID then
+		b = { id = EventPass.ID, xp = 0, claimed = {} }
+		p.eventPass = b
+	end
+	if type(b.claimed) ~= "table" then
+		b.claimed = {}
+	end
+	b.xp = math.max(0, math.floor(tonumber(b.xp) or 0))
+	b.premium = b.premium == true
+	return b
+end
+
+-- THE SAME BLOCK OFF A RAW PROFILE, for the receipt grants in
+-- ConquestMonetization (premium, tier skips), which are handed the profile
+-- rather than the player.
+Data.eventBlock = passBlock
+
+-- XP, the claimed set and whether premium is unlocked, or nil for a profile
+-- that has not loaded.
+function Data.eventPassState(player: Player): (number?, { [string]: boolean }?, boolean)
+	local p = profiles[player]
+	if p == nil then
+		return nil, nil, false
+	end
+	local b = passBlock(p)
+	return b.xp, b.claimed, b.premium
+end
+
+-- One settled round's XP. Returns what was banked: 0 once the event is over,
+-- or for a profile that failed to load (write nothing, per the header).
+function Data.addEventXp(player: Player, place: number, field: number, won: boolean, partial: boolean?): number
+	local p = profiles[player]
+	if p == nil or not EventPass.isLive() then
+		return 0
+	end
+	local horde = ReplicatedStorage:GetAttribute("ConquestHorde")
+	local xp = EventPass.xpFor(place, field, won, partial, horde ~= nil and horde ~= false)
+	local b = passBlock(p)
+	b.xp += xp
+	dirty[player] = true
+	return xp
+end
+
+-- ONE TIER, ALL OR NOTHING, the free reward's contract: returns ok, a reason
+-- a player can read, an `undo`, and the pass keys this claim wrote (for
+-- Monetization.passGifted). THE CALLER MUST FLUSH and call `undo` if that
+-- flush fails -- a grant that is not durable did not happen, and the latch
+-- would otherwise refuse to pay it again.
+--
+-- A pass already held (bought either way) pays its shop Money price instead,
+-- so a great tier is never a dud.
+function Data.claimEventTier(player: Player, tier: any, premium: boolean): (boolean, string, (() -> ())?, { string })
+	local p = profiles[player]
+	if p == nil then
+		return false, "YOUR PROFILE HAS NOT LOADED YET -- TRY AGAIN", nil, {}
+	end
+	local t = math.floor(tonumber(tier) or 0)
+	local spec = EventPass.TIERS[t]
+	if spec == nil then
+		return false, "", nil, {}
+	end
+	local b = passBlock(p)
+	local k = EventPass.claimKey(t, premium)
+	if b.claimed[k] == true then
+		return false, "ALREADY CLAIMED", nil, {}
+	end
+	if premium and not b.premium then
+		return false, "UNLOCK THE HALLOWEEN PASS TO CLAIM THIS", nil, {}
+	end
+	if t > (EventPass.progress(b.xp)) then
+		return false, "PLAY MORE TO REACH TIER " .. t, nil, {}
+	end
+	if type(p.patterns) ~= "table" then
+		p.patterns = {}
+	end
+	if type(p.moneyPasses) ~= "table" then
+		p.moneyPasses = {}
+	end
+	-- EVERY COUNTER A GRANT CAN MOVE, as it stood, for `undo`.
+	local COUNTERS = { "money", "reviveTokens", "renameTokens", "flagTokens", "money3xTokens" }
+	local before: { [string]: number } = {}
+	for _, f in COUNTERS do
+		before[f] = tonumber(p[f]) or 0
+	end
+	local wrote: { { any } } = {}
+	local gifted: { string } = {}
+	local function add(field: string, n: number?)
+		p[field] = math.max(0, (tonumber(p[field]) or 0) + math.floor(n or 0))
+	end
+	for _, g in (if premium then spec.premium else spec.free) do
+		if g.kind == "money" then
+			add("money", g.amount)
+		elseif g.kind == "revive" then
+			add("reviveTokens", g.amount)
+		elseif g.kind == "rename" then
+			add("renameTokens", g.amount)
+		elseif g.kind == "flag" then
+			add("flagTokens", g.amount)
+		elseif g.kind == "money3x" then
+			add("money3xTokens", g.amount)
+		elseif g.kind == "pattern" and g.key ~= nil then
+			if p.patterns[g.key] ~= true then
+				p.patterns[g.key] = true
+				table.insert(wrote, { p.patterns, g.key })
+			end
+		elseif g.kind == "pass" and g.key ~= nil then
+			local held = p.moneyPasses[g.key] == true
+				or (type(p.passes) == "table" and p.passes[g.key] == true)
+			if held then
+				add("money", Products.moneyPrice(g.key))
+			else
+				p.moneyPasses[g.key] = true
+				table.insert(wrote, { p.moneyPasses, g.key })
+				table.insert(gifted, g.key)
+			end
+		end
+	end
+	b.claimed[k] = true
+	dirty[player] = true
+	local function undo()
+		for f, v in before do
+			p[f] = v
+		end
+		for _, w in wrote do
+			w[1][w[2]] = nil
+		end
+		b.claimed[k] = nil
+		dirty[player] = true
+	end
+	return true, "", undo, gifted
 end
 
 function Data.reviveTokens(player: Player): number

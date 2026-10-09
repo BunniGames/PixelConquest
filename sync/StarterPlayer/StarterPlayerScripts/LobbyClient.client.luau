@@ -54,6 +54,12 @@ local shop = PatternShop.new(screen)
 page.onPatterns = function()
 	shop:open()
 end
+-- THE HALLOWEEN EVENT PASS (2026-10-09), a page of its own like the shop,
+-- opened by the lobby's orange pill. Its presses are wired below the remotes.
+local eventUI = require(Shared:WaitForChild("EventPassUI")).new(screen)
+page.onEvent = function()
+	eventUI:open()
+end
 -- FREE REWARDS IS A TAB OF THE SHOP (2026-10-08). The page's rewards panel
 -- is laid onto the shop's FREE REWARDS page, and plays its arrival when that
 -- tab is shown.
@@ -162,8 +168,8 @@ UserInputService.InputBegan:Connect(function(input, processed)
 	end
 	if shop:isOpen() then
 		shop:close()
-	elseif page.eventOpen then
-		page:closeEvent()
+	elseif eventUI:isOpen() then
+		eventUI:close()
 	elseif page.creditsOpen then
 		page:closeCredits()
 	elseif page.listOpen then
@@ -207,6 +213,16 @@ end
 -- and a malformed flag press can never be read as a pattern press.
 shop.onFlagIntent = function(verb: string, id: string)
 	LobbyIntentRE:FireServer("flag", verb, id)
+end
+-- THE EVENT PASS's two seams, straight down the remotes for the shop's reason:
+-- a claim is a profile write, not a board intent, and must never displace a
+-- JOIN. `tier` 0 is CLAIM ALL. Premium and the tier skips are developer
+-- products, so they go up the purchase channel like any other.
+eventUI.onClaim = function(tier: number, premium: boolean?)
+	LobbyIntentRE:FireServer("eventpass", tier, premium == true)
+end
+eventUI.onRobux = function(key: string)
+	ShopRE:FireServer("buy", key)
 end
 -- SEE ALL GAMES SAYING IT IS OPEN, and it bypasses the gate below for exactly
 -- the reason the shop does -- with one extra edge that makes it mandatory here.
@@ -562,6 +578,12 @@ LobbyRE.OnClientEvent:Connect(function(kind, a, b)
 		if groupId then
 			task.delay(3, promptCommunity, groupId)
 		end
+	elseif kind == "eventpass" then
+		-- The event pass: XP, what is claimed, whether premium is open, and
+		-- (after a claim) which rewards just landed. The page never guesses.
+		if type(a) == "table" then
+			eventUI:setState(a.xp, a.claimed, a.premium, a.landed, a.say)
+		end
 	elseif kind == "passes" then
 		-- Which room dials this account's passes open: 0, HOST or ADVANCED.
 		page:setPassTier(tonumber(a) or 0)
@@ -589,4 +611,5 @@ end
 RunService.RenderStepped:Connect(function(dt)
 	page:step(dt)
 	shop:step()
+	eventUI:step()
 end)

@@ -52,6 +52,8 @@ local Patterns = require(Shared.Patterns)
 -- The pass catalogue, for ONE thing: which passes exist, so the shop's
 -- GAMEPASSES tab can be told which of them this account holds (sendPasses).
 local Products = require(Shared.Products)
+-- The Halloween event pass's tiers (2026-10-09): which ones CLAIM ALL takes.
+local EventPass = require(Shared.EventPass)
 -- The profile store, for ONE thing: printing the account's Money balance on
 -- the page. Nothing here earns or spends it -- a lobby server runs no
 -- simulation -- and `install` is ConquestServer's call, not this file's.
@@ -344,6 +346,24 @@ local function sendReward(player: Player, say: string?)
 	})
 end
 
+-- THE EVENT PASS SHEET'S STATE (2026-10-09): XP, which rewards are taken
+-- (EventPass.claimKey: "f7" / "p7") and whether premium is unlocked, straight
+-- off the profile. `say` is the sheet's own message line (a refusal); `landed`
+-- is the claim keys a claim just paid, which the sheet celebrates.
+local function sendEventPass(player: Player, say: string?, landed: { string }?)
+	local xp, claimed, premium = Data.eventPassState(player)
+	if xp == nil or player.Parent == nil then
+		return
+	end
+	LobbyRE:FireClient(player, "eventpass", {
+		xp = xp,
+		claimed = claimed,
+		premium = premium,
+		say = say,
+		landed = landed,
+	})
+end
+
 -- WHAT THE SHOP MAY SHOW, straight off the profile. Sent when that profile
 -- lands and again after anything moves, because the server is the only thing
 -- that knows what an account owns -- a page that guessed would sooner or later
@@ -370,6 +390,8 @@ local function sendPatterns(player: Player)
 	-- in the same instant.
 	sendReward(player)
 	sendFlags(player)
+	-- ...and the event pass, whose claims move the balance and the skins too.
+	sendEventPass(player)
 end
 
 -- ANOTHER SCRIPT MOVED THIS PLAYER'S SKINS OR MONEY (2026-10-08: the ranked
@@ -2146,6 +2168,72 @@ LobbyIntentRE.OnServerEvent:Connect(function(player, action, key, tag)
 			end
 			sendFlags(player)
 		end
+		return
+	end
+
+	-- THE EVENT PASS CLAIM (2026-10-09). `key` is one tier and `tag` true for
+	-- its premium reward -- or `key` 0 for every reward reached and not yet
+	-- taken, on both tracks (the sheet's CLAIM ALL). The free reward's shape
+	-- below: grant in memory, flush, and undo ALL of it if the flush fails.
+	if action == "eventpass" then
+		if (cosmeticAt[userId] or 0) > now - COSMETIC_COOLDOWN then
+			return
+		end
+		cosmeticAt[userId] = now
+		local want: { { any } } = {}
+		local asked = math.floor(tonumber(key) or -1)
+		if asked == 0 then
+			local xp, claimed, premium = Data.eventPassState(player)
+			if xp ~= nil and claimed ~= nil then
+				for t = 1, (EventPass.progress(xp)) do
+					if claimed[EventPass.claimKey(t, false)] ~= true then
+						table.insert(want, { t, false })
+					end
+					if premium and claimed[EventPass.claimKey(t, true)] ~= true then
+						table.insert(want, { t, true })
+					end
+				end
+			end
+		elseif asked >= 1 then
+			want = { { asked, tag == true } }
+		end
+		local undos: { () -> () } = {}
+		local gifted: { string } = {}
+		local landed: { string } = {}
+		local why = ""
+		for _, w in want do
+			local ok, reason, undo, g = Data.claimEventTier(player, w[1], w[2])
+			if ok and undo then
+				table.insert(undos, undo)
+				table.insert(landed, EventPass.claimKey(w[1], w[2]))
+				for _, k in g do
+					table.insert(gifted, k)
+				end
+			elseif why == "" then
+				why = reason
+			end
+		end
+		if #landed == 0 then
+			sendEventPass(player, if why ~= "" then why else "NOTHING TO CLAIM YET")
+			return
+		end
+		if not Data.flush(player) then
+			for i = #undos, 1, -1 do
+				undos[i]()
+			end
+			sendPatterns(player)
+			sendEventPass(player, "COULD NOT SAVE THAT -- TRY AGAIN")
+			return
+		end
+		for _, k in gifted do
+			Monetization.passGifted(player, k)
+		end
+		if #gifted > 0 then
+			sendPasses(player)
+		end
+		sendPatterns(player)
+		sendEventPass(player, nil, landed)
+		Analytics.event("eventpass_claim", player, #landed, { last = landed[#landed] })
 		return
 	end
 

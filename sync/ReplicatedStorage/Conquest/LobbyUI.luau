@@ -2552,78 +2552,6 @@ local function buildCreditsPanel(self: any, parent: Instance)
 	end)
 end
 
--- ------------------------------------------------------------ event pass ---
---
--- THE HALLOWEEN EVENT PASS SHEET (2026-10-08). EMPTY ON PURPOSE (owner:
--- "have it empty for now, we can plan it after"): the credits sheet's
--- furniture at the rewards sheet's size, so the pass has the room it will
--- need, and nothing on it yet but its name and the way out.
-local function buildEventPanel(self: any, parent: Instance)
-	local shade = Instance.new("ImageButton")
-	shade.Name = "EventShade"
-	shade.Image = ""
-	shade.AutoButtonColor = false
-	shade.Size = UDim2.fromScale(1, 1)
-	shade.BackgroundColor3 = Color3.fromRGB(4, 6, 11)
-	shade.BackgroundTransparency = 1
-	shade.BorderSizePixel = 0
-	shade.Visible = false
-	shade.ZIndex = 20
-	shade.Parent = parent
-	self.eventShade = shade
-
-	local frost = Instance.new("ImageLabel")
-	frost.Name = "Frost"
-	frost.BackgroundTransparency = 1
-	frost.Image = KIT_SCRIM
-	frost.ScaleType = Enum.ScaleType.Stretch
-	frost.ImageTransparency = 0.72
-	frost.Size = UDim2.fromScale(1, 1)
-	frost.ZIndex = 0
-	frost.Parent = shade
-
-	local panel = Instance.new("Frame")
-	panel.Name = "EventPanel"
-	panel.BackgroundColor3 = PANEL
-	panel.BackgroundTransparency = 0.02
-	panel.BorderSizePixel = 0
-	panel.Active = true
-	place(panel, REF_W, REF_H, RW_X, RW_Y, RW_W, RW_H)
-	panel.Parent = shade
-	local pc = Instance.new("UICorner")
-	pc.CornerRadius = UDim.new(0, 12)
-	pc.Parent = panel
-	self.eventScale = grower(panel)
-	local ps = Instance.new("UIStroke")
-	ps.Color = LINE
-	ps.Thickness = 1.6
-	ps.Transparency = 0.25
-	ps.Parent = panel
-	local pscrim = Instance.new("ImageLabel")
-	pscrim.Name = "Scrim"
-	pscrim.BackgroundTransparency = 1
-	pscrim.Image = KIT_SCRIM
-	pscrim.ScaleType = Enum.ScaleType.Stretch
-	pscrim.ImageTransparency = 0.3
-	pscrim.Size = UDim2.fromScale(1, 1)
-	pscrim.ZIndex = 0
-	pscrim.Parent = panel
-	roundOff(pscrim, 12)
-
-	kitSet(kitLabel(panel, "EventTitle", RW_W, RW_H, 0, 34, RW_W, 46, EVENT_LINE), "HALLOWEEN EVENT PASS")
-
-	local close = pillButton(panel, "Close", RW_W, RW_H,
-		RW_W - 16 - RW_CLOSE, 16, RW_CLOSE, RW_CLOSE, "X", RED, RED_LINE, POP_BACK)
-	close.Activated:Connect(function()
-		LobbyUI.closeEvent(self)
-	end)
-
-	shade.Activated:Connect(function()
-		popPress(POP_BACK)
-		LobbyUI.closeEvent(self)
-	end)
-end
-
 local function buildListPanel(self: any, parent: Instance)
 	-- `Active`, so a press that misses the sheet cannot reach a card under it.
 	local shade = Instance.new("Frame")
@@ -2948,7 +2876,6 @@ function LobbyUI.new(parent: Instance, myUserId: number): LobbyUI
 	self.rewardReady = false
 	self.rewardsOpen = false
 	self.creditsOpen = false
-	self.eventOpen = false
 	-- Whether this account has already taken the one grant. The SERVER owns
 	-- it (Data.freeReward) and pushes it down beside the patterns; nothing
 	-- here ever sets it from a press. nil until that push has landed, which
@@ -3149,7 +3076,7 @@ function LobbyUI.new(parent: Instance, myUserId: number): LobbyUI
 	-- TWO LINES, because three words in the caption's one 20-high line would
 	-- scale down to half the size of every other caption in the row.
 	self.eventButton = pillButton(root, "EventPass", REF_W, REF_H,
-		FREE_X, BAR_Y, FREE_W, BAR_H, "HALLOWEEN\nEVENT PASS", EVENT_FILL, EVENT_LINE)
+		FREE_X, BAR_Y, FREE_W, BAR_H, "HALLOWEEN\nEVENT", EVENT_FILL, EVENT_LINE)
 	-- The glyph is 46 rather than 52 and sits tighter to the edge since the
 	-- credits dot took a slice of this pill's width: the caption needed that
 	-- room more than the glyph did.
@@ -3157,8 +3084,12 @@ function LobbyUI.new(parent: Instance, myUserId: number): LobbyUI
 	place(pumpkin, FREE_W, BAR_H, 12, 16, 46, 46)
 	local eventCap = self.eventButton:FindFirstChild("Caption") :: TextLabel
 	place(eventCap, FREE_W, BAR_H, 64, (BAR_H - 40) / 2, FREE_W - 72, 40)
+	-- The sheet itself is EventPassUI, built and wired in LobbyClient the way
+	-- the shop is; this page only reports the press.
 	self.eventButton.Activated:Connect(function()
-		LobbyUI.openEvent(self)
+		if self.onEvent then
+			self.onEvent()
+		end
 	end)
 
 	-- ----------------------------------------------------------- credits --
@@ -3472,7 +3403,6 @@ function LobbyUI.new(parent: Instance, myUserId: number): LobbyUI
 	buildListPanel(self, root)
 	buildRewardsPanel(self)
 	buildCreditsPanel(self, root)
-	buildEventPanel(self, root)
 	buildRoomPanel(self, root)
 
 
@@ -4065,32 +3995,6 @@ function LobbyUI.closeRewards(self: LobbyUI)
 	self.rewardsOpen = false
 	setText(self.rewardMsg, "")
 	self.rewardMsgUntil = 0
-end
-
--- ------------------------------------------------------------ event pass ---
-
--- The credits sheet's open and shut, on the event pass's own shade.
-function LobbyUI.openEvent(self: LobbyUI)
-	self.eventOpen = true
-	self.eventShade.BackgroundTransparency = 1
-	self.eventScale.Scale = RW_PANEL_FROM
-	self.eventShade.Visible = true
-	tween(self.eventShade, RW_OPEN_SHADE, { BackgroundTransparency = RW_SHADE_ALPHA })
-	tween(self.eventScale, RW_OPEN_PANEL, { Scale = 1 })
-end
-
-function LobbyUI.closeEvent(self: LobbyUI)
-	if not self.eventOpen then
-		return
-	end
-	self.eventOpen = false
-	tween(self.eventShade, RW_SHUT, { BackgroundTransparency = 1 })
-	tween(self.eventScale, RW_SHUT, { Scale = RW_PANEL_FROM })
-	task.delay(0.12, function()
-		if not self.eventOpen then
-			self.eventShade.Visible = false
-		end
-	end)
 end
 
 -- --------------------------------------------------------------- credits ---

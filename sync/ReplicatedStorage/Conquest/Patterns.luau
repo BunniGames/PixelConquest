@@ -338,6 +338,15 @@ Patterns.TIERS = {
 		price = 0,
 		blurb = "Finish a ranked season in the top 10.",
 	},
+	-- THE HALLOWEEN EVENT PASS (2026-10-09). Rightmost, beside SEASON, for the
+	-- same reason: nothing buys these; the pass's tiers 5, 15 and 25 do.
+	{
+		key = "halloween",
+		name = "HALLOWEEN",
+		color = Color3.fromRGB(255, 146, 48),
+		price = 0,
+		blurb = "From the Halloween Event Pass.",
+	},
 } :: { Tier }
 
 local tierByKey: { [string]: Tier } = {}
@@ -417,6 +426,10 @@ export type Def = {
 	-- refuses it and `standing` is never affordable, for the reward-skin
 	-- reason (its tier price is 0).
 	season: boolean?,
+	-- AN EVENT PASS REWARD (2026-10-09), a SIXTH ownership axis: granted by
+	-- Data.claimEventTier and never sold. Refused by mayBuy and never
+	-- affordable, for the reward-skin reason (its tier price is 0).
+	event: boolean?,
 	-- PAINTED ART instead of a lightness grid; see Patterns.paint. `cells` is
 	-- still required (an empty list is fine) because compile reads it.
 	art: { string }?,
@@ -909,6 +922,99 @@ Patterns.LIST = {
 		},
 		cells = {},
 	},
+
+	-- ------------------------------------------------- halloween event --
+	-- THE EVENT PASS'S THREE GOOD TIERS (2026-10-09): 5, 15, 25. Painted like
+	-- Crowns, two motifs to a 16-tile block on a half-step stagger.
+	{
+		key = "pumpkins",
+		name = "Pumpkins",
+		tier = "halloween",
+		event = true,
+		ink = {
+			O = { 240, 128, 36, 1 }, -- lit rind
+			o = { 178, 80, 20, 1 }, -- rind in shade
+			y = { 255, 214, 92, 1 }, -- the face, lit from inside
+			g = { 60, 140, 60, 1 }, -- stem
+		},
+		art = {
+			"................",
+			"...g............",
+			"..oOOOo.........",
+			".oOOyOOo........",
+			".oOyOyOo........",
+			".oOOOOOo........",
+			"..ooooo.........",
+			"................",
+			"................",
+			"...........g....",
+			"..........oOOOo.",
+			".........oOOyOOo",
+			".........oOyOyOo",
+			".........oOOOOOo",
+			"..........ooooo.",
+			"................",
+		},
+		cells = {},
+	},
+	{
+		key = "bats",
+		name = "Bats",
+		tier = "halloween",
+		event = true,
+		ink = {
+			K = { 24, 18, 32, 0.9 }, -- the bat
+			R = { 230, 40, 40, 1 }, -- its eye
+		},
+		art = {
+			"................",
+			"................",
+			"K..K.K..K.......",
+			"KK.KKK.KK.......",
+			"KKKKKKKKK.......",
+			".KKKRKKK........",
+			"...KKK..........",
+			"................",
+			"................",
+			"................",
+			".......K..K.K..K",
+			".......KK.KKK.KK",
+			".......KKKKKKKKK",
+			"........KKKRKKK.",
+			"..........KKK...",
+			"................",
+		},
+		cells = {},
+	},
+	{
+		key = "ghosts",
+		name = "Ghosts",
+		tier = "halloween",
+		event = true,
+		ink = {
+			W = { 244, 246, 255, 0.88 }, -- the sheet
+			K = { 24, 18, 32, 1 }, -- eyes
+		},
+		art = {
+			"................",
+			"..WWW...........",
+			".WWWWW..........",
+			"WWKWKWW.........",
+			"WWKWKWW.........",
+			"WWWWWWW.........",
+			"WWWWWWW.........",
+			"W.W.W.W.........",
+			"................",
+			"..........WWW...",
+			".........WWWWW..",
+			"........WWKWKWW.",
+			"........WWKWKWW.",
+			"........WWWWWWW.",
+			"........WWWWWWW.",
+			"........W.W.W.W.",
+		},
+		cells = {},
+	},
 } :: { Def }
 
 Patterns.DEFAULT_KEY = "solid"
@@ -1078,6 +1184,12 @@ function Patterns.isSeason(def: Def): boolean
 	return def.season == true
 end
 
+-- Whether a pattern is an EVENT PASS reward. The grant path is
+-- Data.claimEventTier and there is no other one.
+function Patterns.isEvent(def: Def): boolean
+	return def.event == true
+end
+
 -- The MONEY price. Zero for a Robux skin, whatever its tier says: the tier
 -- price is what the tier's Money patterns cost, and a Robux skin sitting in
 -- that column is not for Money at all.
@@ -1198,6 +1310,8 @@ export type Standing = {
 	reward: boolean,
 	-- A ranked season reward; same consequence again, its own card.
 	season: boolean,
+	-- An event pass reward; same again.
+	event: boolean,
 }
 
 function Patterns.standing(def: Def, owned: { [string]: boolean }?, money: number, wins: number): Standing
@@ -1207,6 +1321,7 @@ function Patterns.standing(def: Def, owned: { [string]: boolean }?, money: numbe
 	local vip = Patterns.isVip(def)
 	local reward = Patterns.isReward(def)
 	local season = Patterns.isSeason(def)
+	local event = Patterns.isEvent(def)
 	return {
 		owned = def.key == Patterns.DEFAULT_KEY or (owned ~= nil and owned[def.key] == true),
 		-- A VIP pattern is NEVER affordable, whatever the balance. Without that
@@ -1216,13 +1331,14 @@ function Patterns.standing(def: Def, owned: { [string]: boolean }?, money: numbe
 		-- version of the VIP reason above: its tier price is 0, so without
 		-- this term `money >= price` is true at a balance of nothing and the
 		-- shop draws a free skin with a +3% boost on it.
-		affordable = need == nil and not robux and not vip and not reward and not season and money >= price,
+		affordable = need == nil and not robux and not vip and not reward and not season and not event and money >= price,
 		winsShort = (need ~= nil and wins < need) and (need - wins) or nil,
 		price = price,
 		robux = robux,
 		vip = vip,
 		reward = reward,
 		season = season,
+		event = event,
 	}
 end
 
@@ -1253,6 +1369,9 @@ function Patterns.mayBuy(def: Def, owned: { [string]: boolean }?, money: number,
 	end
 	if Patterns.isSeason(def) then
 		return false, `{def.name} is a ranked season reward -- finish in the top 10.`
+	end
+	if Patterns.isEvent(def) then
+		return false, `{def.name} comes from the Halloween Event Pass.`
 	end
 	if Patterns.isVip(def) then
 		return false, `{def.name} comes with VIP.`
