@@ -25,6 +25,7 @@ local Products = require(Conquest:WaitForChild("Products"))
 local LobbyUI = require(Conquest:WaitForChild("LobbyUI"))
 local Sfx = require(Conquest:WaitForChild("Sfx"))
 local MoneyNote = require(Conquest:WaitForChild("MoneyNote"))
+local Icons = require(Conquest:WaitForChild("Icons"))
 
 local kit = LobbyUI.kit
 local place, label, kitLabel, kitSet, setText = kit.place, kit.label, kit.kitLabel, kit.kitSet, kit.setText
@@ -235,6 +236,9 @@ local function grantWords(g: EventPass.Grant): string
 		return "FLAG UNLOCK"
 	elseif g.kind == "money3x" then
 		return if n > 1 then n .. "x 3X MONEY ROUND" else "3X MONEY ROUND"
+	elseif g.kind == "coupon" then
+		local what = if g.key == "BOOST_GOLD" then "GOLD BOOST" else "SPECIAL FORCES"
+		return (if n > 1 then n .. "x " else "") .. what .. " COUPON"
 	end
 	return ""
 end
@@ -277,6 +281,26 @@ local function iconInto(box: GuiObject, g: EventPass.Grant)
 			pic.Parent = box
 			return
 		end
+	end
+	if g.kind == "coupon" then
+		local img = Instance.new("ImageLabel")
+		img.Name = "Coupon"
+		img.BackgroundTransparency = 1
+		img.ScaleType = Enum.ScaleType.Fit
+		img.Image = if g.key == "BOOST_GOLD" then Icons.GOLD else Icons.SWORD
+		img.AnchorPoint = Vector2.new(0.5, 0.5)
+		img.Position = UDim2.fromScale(0.5, 0.5)
+		img.Size = UDim2.fromScale(0.86, 0.86)
+		img.Parent = box
+		Icons.resample(img)
+		local tag = label(box, "Tag", 100, 100, 0, 66, 100, 34, Color3.fromRGB(111, 217, 138), Enum.TextXAlignment.Center, kit.FONT_KIT)
+		setText(tag, "15:00")
+		tag.ZIndex = 3
+		local s = Instance.new("UIStroke")
+		s.Thickness = 2
+		s.Color = Color3.fromRGB(20, 22, 28)
+		s.Parent = tag
+		return
 	end
 	local art = if g.kind == "revive" then HEART elseif g.kind == "rename" then PENCIL elseif g.kind == "flag" then FLAG else nil
 	if art then

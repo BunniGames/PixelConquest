@@ -55,6 +55,8 @@ local Patterns = require(ReplicatedStorage:WaitForChild("Conquest"):WaitForChild
 -- grant from (2026-10-09; see the event pass section below).
 local EventPass = require(ReplicatedStorage.Conquest:WaitForChild("EventPass"))
 local Products = require(ReplicatedStorage.Conquest:WaitForChild("Products"))
+-- The timed boosts a coupon starts, and their length.
+local Config = require(ReplicatedStorage.Conquest:WaitForChild("Config"))
 
 -- THE VERSION LIVES IN THE STORE NAME, which is the same migration idiom
 -- Matchmaker uses for its MemoryStore records: a breaking schema change bumps
@@ -210,6 +212,10 @@ local function defaultProfile(): any
 		-- keyed by EventPass.ID so the next event starts every account from
 		-- nothing. Read and written only through the event pass section below.
 		eventPass = {},
+		-- BOOST COUPONS (2026-10-09): Config.TIMED_BOOSTS key -> how many
+		-- unstarted 15-minute boosts this account holds. Granted by the event
+		-- pass, spent by Data.useCoupon.
+		boostCoupons = {},
 		-- THE TUTORIAL FOUR (2026-09-12), keyed by product key: how many of
 		-- each are in hand. Banked by a grant in ConquestMonetization, spent
 		-- by ConquestServer.redeemBoost, and read through Data.boostTokens /
@@ -1127,8 +1133,12 @@ function Data.claimEventTier(player: Player, tier: any, premium: boolean): (bool
 	for _, f in COUNTERS do
 		before[f] = tonumber(p[f]) or 0
 	end
+	-- Every table entry a grant can write, as { table, key, old value }.
 	local wrote: { { any } } = {}
 	local gifted: { string } = {}
+	if type(p.boostCoupons) ~= "table" then
+		p.boostCoupons = {}
+	end
 	local function add(field: string, n: number?)
 		p[field] = math.max(0, (tonumber(p[field]) or 0) + math.floor(n or 0))
 	end
@@ -1145,17 +1155,20 @@ function Data.claimEventTier(player: Player, tier: any, premium: boolean): (bool
 			add("money3xTokens", g.amount)
 		elseif g.kind == "pattern" and g.key ~= nil then
 			if p.patterns[g.key] ~= true then
+				table.insert(wrote, { p.patterns, g.key, p.patterns[g.key] })
 				p.patterns[g.key] = true
-				table.insert(wrote, { p.patterns, g.key })
 			end
+		elseif g.kind == "coupon" and g.key ~= nil then
+			table.insert(wrote, { p.boostCoupons, g.key, p.boostCoupons[g.key] })
+			p.boostCoupons[g.key] = math.max(0, math.floor(tonumber(p.boostCoupons[g.key]) or 0)) + math.floor(g.amount or 1)
 		elseif g.kind == "pass" and g.key ~= nil then
 			local held = p.moneyPasses[g.key] == true
 				or (type(p.passes) == "table" and p.passes[g.key] == true)
 			if held then
 				add("money", Products.moneyPrice(g.key))
 			else
+				table.insert(wrote, { p.moneyPasses, g.key, p.moneyPasses[g.key] })
 				p.moneyPasses[g.key] = true
-				table.insert(wrote, { p.moneyPasses, g.key })
 				table.insert(gifted, g.key)
 			end
 		end
@@ -1166,14 +1179,70 @@ function Data.claimEventTier(player: Player, tier: any, premium: boolean): (bool
 		for f, v in before do
 			p[f] = v
 		end
-		for _, w in wrote do
-			w[1][w[2]] = nil
+		for i = #wrote, 1, -1 do
+			local w = wrote[i]
+			w[1][w[2]] = w[3]
 		end
 		b.claimed[k] = nil
 		dirty[player] = true
 	end
 	return true, "", undo, gifted
 end
+
+-- ========================================================== boost coupons ==
+--
+-- A COUPON IS A TIMED BOOST THAT HAS NOT STARTED (2026-10-09, owner: "give
+-- coupons for players to activate the boosts as some rewards"). A boost is a
+-- wall-clock deadline, so one granted in the lobby would burn down before a
+-- round began; a coupon waits on the profile until the player spends it on the
+-- in-match store's boost card, and only then becomes the same deadline a
+-- purchase sets (profile.boostUntil, read by ConquestServer.timedBoosts).
+
+-- How many are held, per key, as ConquestCoupon_<KEY> attributes (nil at 0),
+-- which is what the store card draws from.
+function Data.publishCoupons(player: Player)
+	local p = profiles[player]
+	if p == nil or player.Parent == nil then
+		return
+	end
+	local c = if type(p.boostCoupons) == "table" then p.boostCoupons else {}
+	for key in Config.TIMED_BOOSTS do
+		local n = math.max(0, math.floor(tonumber(c[key]) or 0))
+		local want = if n > 0 then n else nil
+		if player:GetAttribute(Config.COUPON_ATTR .. key) ~= want then
+			player:SetAttribute(Config.COUPON_ATTR .. key, want)
+		end
+	end
+end
+
+-- Spends one: the boost starts now, or extends one already running, exactly
+-- as buying it would. False with nothing written when none is held.
+function Data.useCoupon(player: Player, key: any): boolean
+	local p = profiles[player]
+	if p == nil or type(key) ~= "string" or Config.TIMED_BOOSTS[key] == nil then
+		return false
+	end
+	if type(p.boostCoupons) ~= "table" then
+		p.boostCoupons = {}
+	end
+	local n = math.floor(tonumber(p.boostCoupons[key]) or 0)
+	if n <= 0 then
+		return false
+	end
+	p.boostCoupons[key] = n - 1
+	if type(p.boostUntil) ~= "table" then
+		p.boostUntil = {}
+	end
+	local now = os.time()
+	p.boostUntil[key] = math.max(now, tonumber(p.boostUntil[key]) or 0) + Config.BOOST_SECONDS
+	dirty[player] = true
+	Data.publishCoupons(player)
+	return true
+end
+
+Data.onReady(function(player: Player)
+	Data.publishCoupons(player)
+end)
 
 function Data.reviveTokens(player: Player): number
 	local p = profiles[player]

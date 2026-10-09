@@ -1089,6 +1089,9 @@ Config.TUTORIAL_ATTACK_SPEED = 2
 -- Forces (2x Attack Speed)!" product, re-sold as a timed boost.
 Config.BOOST_SECONDS = 15 * 60
 Config.BOOST_ATTR = "ConquestBoost_"
+-- BOOST COUPONS (2026-10-09): how many unstarted boosts of each key a player
+-- holds, published by ConquestData.publishCoupons for the store's boost cards.
+Config.COUPON_ATTR = "ConquestCoupon_"
 Config.TIMED_BOOSTS = {
 	-- Multiplies Sim.tilesPerTick, on top of the mode's own attackSpeed.
 	-- +50% (owner, 2026-10-04: cut from 2x; the card and blurb say +50% too).

@@ -176,6 +176,16 @@ ShopRE.OnServerEvent:Connect(function(player, kind, a)
 		if player.Parent ~= nil then
 			ShopRE:FireClient(player, "passmoney", a, ok, why, Data.money(player))
 		end
+	elseif kind == "coupon" then
+		-- A BOOST COUPON SPENT (2026-10-09) from the store's boost card. The
+		-- boost starts now, as a purchase would; a match server's timedBoosts
+		-- turns the deadline on within a tick. Rate-limited like a purchase.
+		if tooSoon(player) then
+			return
+		end
+		if Data.useCoupon(player, a) then
+			task.spawn(Data.flush, player)
+		end
 	elseif kind == "money" then
 		-- THE BALANCE, ASKED FOR. The lobby is told on load and on every change
 		-- (MatchmakerServer); a match server's "+" page has no such push and

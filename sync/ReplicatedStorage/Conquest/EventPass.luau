@@ -15,14 +15,23 @@
 -- tiers too. Buying premium late opens every premium tier already reached.
 --
 -- THE PREMIUM LADDER BY tier % 10, as the owner set it:
---   0  GREAT   a gamepass, handed over as if bought (moneyPasses) -- the
---              Artillery, Air Strike and Railgun bundles, 25K / 100K / 250K
---              Money in the shop. One already held pays its Money price.
+--   0  GREAT   10 and 20 a big Money haul with tokens on top; 30 the
+--              Artillery Battery Bundle, handed over as if bought
+--              (moneyPasses) -- the ONLY pass on the track (owner,
+--              2026-10-09). Already held, it pays its shop Money price.
 --   5  GOOD    a Halloween-only tile pattern (Patterns, tier "halloween")
 --              plus Money -- never sold, the pass is the only door
 --   3, 8 MID   a token the store sells for Robux: revive, rename, flag,
 --              3x money round
---   rest       FILLER Money, the same as the free track's
+--   rest       FILLER Money, the same as the free track's -- or a BOOST
+--              COUPON on 4/7/12/17/22/27 (owner, 2026-10-09: "give coupons
+--              for players to activate the boosts as some rewards")
+--
+-- A COUPON is a timed boost (Config.TIMED_BOOSTS: Gold Boost 2x gold, Special
+-- Forces +50% speed vs AI) that has not started: it waits on the profile until
+-- the player spends it on the in-match store's boost card, so its 15 minutes
+-- run in a round of their choosing (Data.useCoupon). The free track gets one
+-- on each of 10 / 20 / 30 as well.
 --
 -- TIER SKIPS: +1 / +3 / +5 TIER developer products move the account that many
 -- tiers along (EventPass.skip), keeping how far into the current tier it was.
@@ -93,15 +102,28 @@ local SPECIAL: { [number]: { Grant } } = {
 	[3] = { { kind = "revive", amount = 1 } },
 	[5] = { { kind = "pattern", key = "pumpkins" }, { kind = "money", amount = 2500 } },
 	[8] = { { kind = "rename", amount = 1 } },
-	[10] = { { kind = "pass", key = "ARTILLERY" } },
+	[4] = { { kind = "coupon", key = "BOOST_GOLD", amount = 1 } },
+	[7] = { { kind = "coupon", key = "TUTORIAL_FORCES", amount = 1 } },
+	[10] = { { kind = "money", amount = 10000 }, { kind = "revive", amount = 2 } },
+	[12] = { { kind = "coupon", key = "BOOST_GOLD", amount = 1 } },
 	[13] = { { kind = "money3x", amount = 1 } },
 	[15] = { { kind = "pattern", key = "bats" }, { kind = "money", amount = 5000 } },
 	[18] = { { kind = "flag", amount = 1 } },
-	[20] = { { kind = "pass", key = "AIRSTRIKE" } },
+	[17] = { { kind = "coupon", key = "TUTORIAL_FORCES", amount = 1 } },
+	[20] = { { kind = "money", amount = 25000 }, { kind = "money3x", amount = 2 } },
+	[22] = { { kind = "coupon", key = "BOOST_GOLD", amount = 2 } },
 	[23] = { { kind = "revive", amount = 2 } },
 	[25] = { { kind = "pattern", key = "ghosts" }, { kind = "money", amount = 7500 } },
 	[28] = { { kind = "money3x", amount = 2 } },
-	[30] = { { kind = "pass", key = "RAILGUN" } },
+	[27] = { { kind = "coupon", key = "TUTORIAL_FORCES", amount = 2 } },
+	[30] = { { kind = "pass", key = "ARTILLERY" } },
+}
+
+-- THE FREE TRACK'S COUPONS, on top of its Money: a taste of each boost.
+local FREE_EXTRA: { [number]: Grant } = {
+	[10] = { kind = "coupon", key = "BOOST_GOLD", amount = 1 },
+	[20] = { kind = "coupon", key = "TUTORIAL_FORCES", amount = 1 },
+	[30] = { kind = "coupon", key = "BOOST_GOLD", amount = 2 },
 }
 
 EventPass.COUNT = 30
@@ -109,7 +131,8 @@ EventPass.TIERS = {} :: { Tier }
 for i = 1, EventPass.COUNT do
 	EventPass.TIERS[i] = {
 		cost = cost(i),
-		free = { { kind = "money", amount = band(i) } },
+		free = FREE_EXTRA[i] and { { kind = "money", amount = band(i) }, FREE_EXTRA[i] }
+			or { { kind = "money", amount = band(i) } },
 		premium = SPECIAL[i] or { { kind = "money", amount = band(i) } },
 	}
 end

@@ -1222,6 +1222,9 @@ local function wire(slot: Slot)
 		lastPress = -1e9,
 		owned = false,
 		sitePrice = nil,
+		-- BOOST COUPONS held for this card's boost (2026-10-09). While any are,
+		-- the pill reads USE COUPON and spends one instead of prompting.
+		coupons = 0,
 	}
 
 	-- THE ONLY WRITER OF THE PRICE LABEL. THREE things wanted to set it and they
@@ -1238,12 +1241,14 @@ local function wire(slot: Slot)
 		end
 		local pr = deep(buyBox, "Price")
 		if pr ~= nil and (pr:IsA("TextLabel") or pr:IsA("TextButton")) then
-			pr.Text = if state.owned then "OWNED" else tostring(state.sitePrice or product.robux)
+			pr.Text = if state.owned then "OWNED"
+				elseif state.coupons > 0 then "USE COUPON (" .. state.coupons .. ")"
+				else tostring(state.sitePrice or product.robux)
 		end
-		-- The Robux glyph means nothing beside the word OWNED.
+		-- The Robux glyph means nothing beside OWNED or a coupon.
 		for _, d in buyBox:GetDescendants() do
 			if d:IsA("ImageLabel") and d.Image == ROBUX_GLYPH then
-				d.Visible = not state.owned
+				d.Visible = not state.owned and state.coupons <= 0
 			end
 		end
 	end
@@ -1260,9 +1265,25 @@ local function wire(slot: Slot)
 		state.lastPress = now
 		state.punch = 1
 		Sfx.play("Click")
+		-- A HELD COUPON IS SPENT FIRST: the countdown starting is the feedback.
+		if slot.timed and state.coupons > 0 then
+			ShopRE:FireServer("coupon", slot.key)
+			return
+		end
 		-- Nothing here reports success: the receipt's own effect is the feedback.
 		-- The VERB is the header's trap -- a pass is not a product.
 		ShopRE:FireServer(if slot.kind == "pass" then "pass" else "buy", slot.key)
+	end
+
+	-- THE COUPON COUNT, off the attribute the server publishes.
+	if slot.timed then
+		local attr = require(Shared.Config).COUPON_ATTR .. slot.key
+		local function coupons()
+			state.coupons = math.max(0, math.floor(tonumber(player:GetAttribute(attr)) or 0))
+			state.repaint()
+		end
+		coupons()
+		player:GetAttributeChangedSignal(attr):Connect(coupons)
 	end
 
 	if buyBox ~= nil then

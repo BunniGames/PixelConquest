@@ -2221,6 +2221,7 @@ LobbyIntentRE.OnServerEvent:Connect(function(player, action, key, tag)
 			for i = #undos, 1, -1 do
 				undos[i]()
 			end
+			Data.publishCoupons(player)
 			sendPatterns(player)
 			sendEventPass(player, "COULD NOT SAVE THAT -- TRY AGAIN")
 			return
@@ -2228,6 +2229,7 @@ LobbyIntentRE.OnServerEvent:Connect(function(player, action, key, tag)
 		for _, k in gifted do
 			Monetization.passGifted(player, k)
 		end
+		Data.publishCoupons(player)
 		if #gifted > 0 then
 			sendPasses(player)
 		end
