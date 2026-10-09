@@ -283,6 +283,29 @@ local function grantWords(g: EventPass.Grant): string
 	return ""
 end
 
+-- One or two words for a card: the badge carries the number.
+local function shortName(g: EventPass.Grant): string
+	if g.kind == "money" then
+		return "MONEY"
+	elseif g.kind == "pattern" then
+		local def = Patterns.byKey(g.key)
+		return string.upper(def and def.name or tostring(g.key)) .. " SKIN"
+	elseif g.kind == "pass" then
+		return if g.key == "ARTILLERY" then "ARTILLERY" else string.upper(tostring(g.key))
+	elseif g.kind == "revive" then
+		return "REVIVE"
+	elseif g.kind == "rename" then
+		return "RENAME"
+	elseif g.kind == "flag" then
+		return "FLAG"
+	elseif g.kind == "money3x" then
+		return "3X MONEY"
+	elseif g.kind == "coupon" then
+		return if g.key == "BOOST_GOLD" then "GOLD BOOST" else "SPECIAL FORCES"
+	end
+	return ""
+end
+
 local function rewardWords(grants: { EventPass.Grant }): string
 	local parts = {}
 	for _, g in grants do
@@ -415,6 +438,18 @@ local function buildSlot(self: any, card: Instance, tier: number, premium: boole
 		badge(box, "+" .. short(other.amount or 0), kit.GOLD)
 	end
 	local words = if extra then grantWords(grants[2]) .. "  +  " .. grantWords(grants[1]) else (string.gsub(rewardWords(grants), "\n", " "))
+
+	-- THE PREMIUM REWARD'S NAME, one short line under its icon (owner,
+	-- 2026-10-09: "you can still have some text"). The free row is Money with
+	-- its number on the badge, so it goes without.
+	if premium then
+		local nm = label(group, "Name", SLOT_W, h, 4, 148, SLOT_W - 8, 20, kit.INK, Enum.TextXAlignment.Center, kit.FONT_BOLD)
+		local cap = nm:FindFirstChildOfClass("UITextSizeConstraint")
+		if cap then
+			cap.MaxTextSize = 15
+		end
+		setText(nm, shortName(lead))
+	end
 
 	-- CLAIM: a green chip under the icon while it can be taken.
 	local chipW, chipH = SLOT_W - 24, if premium then 26 else 22
@@ -584,7 +619,9 @@ function EventPassUI.new(parent: Instance): any
 	tbs.Color = ORANGE
 	tbs.Thickness = 1.6
 	tbs.Parent = tb
-	self.tierText = label(tb, "Tier", 92, 50, 0, 6, 92, 38, kit.INK, Enum.TextXAlignment.Center, kit.FONT_KIT)
+	local tierCap = label(tb, "TierCaption", 92, 50, 0, 3, 92, 12, Color3.fromRGB(255, 214, 170), Enum.TextXAlignment.Center, kit.FONT_BOLD)
+	setText(tierCap, "TIER")
+	self.tierText = label(tb, "Tier", 92, 50, 0, 15, 92, 32, kit.INK, Enum.TextXAlignment.Center, kit.FONT_KIT)
 	local bar = Instance.new("Frame")
 	bar.Name = "Bar"
 	bar.BackgroundColor3 = SLOT_FILL
@@ -610,6 +647,8 @@ function EventPassUI.new(parent: Instance): any
 	xs.Thickness = 1.5
 	xs.Color = Color3.fromRGB(20, 22, 28)
 	xs.Parent = self.xpText
+	local how = label(panel, "Hint", PW, PH, 132, 114, 820, 16, kit.INK_DIM, Enum.TextXAlignment.Center, kit.FONT_BOLD)
+	setText(how, "PLAY MATCHES TO EARN XP  -  HORDE GIVES 2X")
 	self.clock = label(panel, "Clock", PW, PH, 1000, 83, PW - 24 - 1000, 24, ORANGE, Enum.TextXAlignment.Left, kit.FONT_BOLD)
 	do
 		local images = StarterGui:FindFirstChild("Images")
