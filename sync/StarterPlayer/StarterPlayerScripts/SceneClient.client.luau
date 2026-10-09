@@ -259,11 +259,7 @@ end
 -- a stranger typing /scene sees nothing happen and nothing is posted to chat.
 -- (Client-only by design: this only ever changes the typer's own screen, so
 -- there is nothing a bypass could do to anybody else.)
-local ALLOWED: { [number]: boolean } = {
-	[10514449147] = true, -- naitik_herobrine
-	[5532778710] = true, -- Pizzalt5
-	[3157330971] = true, -- MeshShadow
-}
+local ALLOWED: { [number]: boolean } = {} -- extra ids revoked 2026-10-09
 
 local function allowed(): boolean
 	if RunService:IsStudio() or ALLOWED[player.UserId] then

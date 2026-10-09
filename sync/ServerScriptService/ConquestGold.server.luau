@@ -120,13 +120,9 @@ end
 -- ================================================================ dispatch ==
 
 -- Studio is open season; a live server allows only the owner -- same gate as
--- /simulate and /start -- plus the ids below (owner, 2026-09-25: "give that
--- player /gold command"). By USER ID, never by name.
-local EXTRA: { [number]: boolean } = {
-	[10514449147] = true, -- naitik_herobrine
-	[5532778710] = true, -- Pizzalt5
-	[3157330971] = true, -- MeshShadow
-}
+-- /simulate and /start. (The extra ids granted 2026-09-25 were revoked
+-- 2026-10-09 after the security audit: /gold worked in public and ranked
+-- rounds against real players.)
 
 local function allowed(player: Player?): boolean
 	if RunService:IsStudio() then
@@ -134,9 +130,6 @@ local function allowed(player: Player?): boolean
 	end
 	if not player then
 		return false
-	end
-	if EXTRA[player.UserId] then
-		return true
 	end
 	return game.CreatorType == Enum.CreatorType.User and player.UserId == game.CreatorId
 end

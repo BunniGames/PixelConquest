@@ -469,9 +469,9 @@ local studioPasses: { [string]: boolean } = {}
 -- `passes`, so taking an id off this list takes the passes away again. The
 -- one-time Money a pass carries (VIP's, and any Products grant) does settle
 -- for him like a buyer's, since settleVip / settlePass pay whoever owns it.
-local GIFTED_ALL: { [number]: boolean } = {
-	[10514449147] = true, -- naitik_herobrine
-}
+-- REVOKED 2026-10-09 (security audit): naitik_herobrine removed. The table
+-- is kept so a future gift is a one-line change.
+local GIFTED_ALL: { [number]: boolean } = {}
 
 -- THE CACHED ANSWER, NO YIELD (2026-09-22): does this account hold `key`,
 -- as the ConquestPass_<KEY> attribute says. The attribute is THIS module's
@@ -810,10 +810,7 @@ function Monetization.settlePass(player: Player, key: string): boolean
 	local ok, err = pcall(function()
 		local owns = Monetization.ownsPass(player, key)
 		if player.Parent ~= nil then
-			-- Pizzalt5 and MeshShadow get every pass-locked building without owning the pass:
-			-- the attribute (what holdsPass and the HUD read) opens, but `owns`
-			-- stays the site's answer, so no grant is paid below.
-			player:SetAttribute(Products.PASS_ATTR .. key, owns or player.UserId == 5532778710 or player.UserId == 3157330971)
+			player:SetAttribute(Products.PASS_ATTR .. key, owns)
 		end
 		if not owns then
 			return
