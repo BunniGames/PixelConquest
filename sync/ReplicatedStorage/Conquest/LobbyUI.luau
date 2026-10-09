@@ -143,6 +143,12 @@ local RED_LINE = Color3.fromRGB(232, 96, 96)
 -- costs one new colour rather than two.
 local FREE_FILL = Color3.fromRGB(28, 112, 62)
 local FREE_LINE = GAIN
+-- THE EVENT PASS'S ORANGE (2026-10-08, owner: the FREE REWARDS pill became
+-- the HALLOWEEN EVENT PASS button and free rewards moved into the shop). The
+-- pill keeps the green one's argument -- deep fill, bright edge, the one
+-- button in its row that is not a way into a match -- in the season's colour.
+local EVENT_FILL = Color3.fromRGB(150, 62, 14)
+local EVENT_LINE = Color3.fromRGB(255, 146, 48)
 -- The game's desk. The page sits on the same wood the map lies on.
 local DESK = Color3.fromRGB(76, 52, 36)
 
@@ -923,6 +929,9 @@ local PIX_P: { [string]: { number } } = {
 	["d"] = { 28, 112, 62, 255 },
 	["g"] = { 111, 217, 138, 255 },
 	["l"] = { 206, 246, 214, 255 },
+	-- The pumpkin (2026-10-08): lit rind and the shade in its ribs.
+	["p"] = { 240, 128, 36, 255 },
+	["q"] = { 178, 80, 20, 255 },
 }
 local GIFT_ART = {
 	"................",
@@ -939,6 +948,26 @@ local GIFT_ART = {
 	"..koooorrooook..",
 	"..koooorrooook..",
 	"..koooorrooook..",
+	"..kkkkkkkkkkkk..",
+	"................",
+}
+-- THE EVENT PASS'S GLYPH, in the gift's slot on the same pill: a
+-- jack-o'-lantern lit from inside in the page's gold.
+local PUMPKIN_ART = {
+	"................",
+	".......kk.......",
+	"......kddk......",
+	"..kkkkkddkkkkk..",
+	".kppqppppppqppk.",
+	"kppqppppppppqppk",
+	"kpqpkkppppkkpqpk",
+	"kpqkyykppkyykqpk",
+	"kpqppppkkppppqpk",
+	"kpqppppppppppqpk",
+	"kpqkkpkkkkpkkqpk",
+	"kpqkyyyyyyyykqpk",
+	"kppqkkyykkkkqppk",
+	".kppqppkkppqppk.",
 	"..kkkkkkkkkkkk..",
 	"................",
 }
@@ -2104,9 +2133,13 @@ end
 
 -- --------------------------------------------------------------- rewards ---
 --
--- THE FREE REWARDS SHEET, on the same modal frame as ALL GAMES: same shade,
--- same panel, same corner radius, and the board behind it keeps its clocks and
--- keeps filling. A second sheet over one page, not a second screen.
+-- THE FREE REWARDS PAGE. Since 2026-10-08 it is a TAB OF THE SHOP (owner:
+-- "the free reward should be a tab under the shop") rather than a modal of
+-- its own: the shop supplies the panel, the backdrop and the way out, and
+-- this file builds only what goes on it -- because the state and the wiring
+-- (claim, invite, the server's push) already live here. See mountRewards.
+-- The modal curves below stay because the credits and event pass sheets
+-- still arrive on them.
 --
 -- TWO COLUMNS, AND THE ORDER IS THE ARGUMENT. What you get is on the LEFT and
 -- is read first; what it costs you is on the right, and reads as its price.
@@ -2260,74 +2293,19 @@ local function buildTaskRow(self: any, parent: Instance, index: number): any
 	return { row = row, cap = cap, scale = grower(row) }
 end
 
-local function buildRewardsPanel(self: any, parent: Instance)
-	-- A BUTTON, NOT A FRAME, and that is the whole of "click the background to
-	-- close": the backdrop already ate every press that missed the panel, and
-	-- now it answers one. The panel below is `Active`, so a press that LANDS on
-	-- the sheet is absorbed there and never reaches this.
-	local shade = Instance.new("ImageButton")
-	shade.Name = "RewardShade"
-	shade.Image = ""
-	shade.AutoButtonColor = false
-	shade.Size = UDim2.fromScale(1, 1)
-	shade.BackgroundColor3 = Color3.fromRGB(4, 6, 11)
-	shade.BackgroundTransparency = 1
-	shade.BorderSizePixel = 0
-	shade.Visible = false
-	shade.ZIndex = 20
-	shade.Parent = parent
-	self.rewardShade = shade
-
-	-- AS CLOSE TO A BLUR AS A GUI GETS. Roblox's BlurEffect is a 3D
-	-- post-process and everything behind this sheet is opaque GUI -- the lobby
-	-- page's own wash over the camera -- so a blur hung on Lighting would have
-	-- nothing to act on and would render exactly nothing. What does read as
-	-- depth is a deeper wash with the kit's own grain over it: texture rather
-	-- than a flat sheet of black.
-	local frost = Instance.new("ImageLabel")
-	frost.Name = "Frost"
-	frost.BackgroundTransparency = 1
-	frost.Image = KIT_SCRIM
-	frost.ScaleType = Enum.ScaleType.Stretch
-	frost.ImageTransparency = 0.72
-	frost.Size = UDim2.fromScale(1, 1)
-	frost.ZIndex = 0
-	frost.Parent = shade
-
+local function buildRewardsPanel(self: any)
+	-- TRANSPARENT AND NOT `Active`: it is laid over the shop's own panel, and
+	-- its rectangle reaches up behind the shop's tab strip, which must still
+	-- take a press. Unparented until mountRewards hands it to the shop.
 	local panel = Instance.new("Frame")
 	panel.Name = "RewardPanel"
-	panel.BackgroundColor3 = PANEL
-	panel.BackgroundTransparency = 0.02
+	panel.BackgroundTransparency = 1
 	panel.BorderSizePixel = 0
-	-- ...and this is the other half of the backdrop press: an Active frame
-	-- absorbs the input that lands on it, so a click on the sheet itself is
-	-- never a click on the backdrop behind it.
-	panel.Active = true
-	place(panel, REF_W, REF_H, RW_X, RW_Y, RW_W, RW_H)
-	panel.Parent = shade
-	local pc = Instance.new("UICorner")
-	pc.CornerRadius = UDim.new(0, 12)
-	pc.Parent = panel
-	-- Scaled as a whole on open, so the title, the plate and the rows all
-	-- arrive with it and only the right-hand column has a sweep of its own.
+	panel.Size = UDim2.fromScale(1, 1)
+	self.rewardPanel = panel
+	-- Scaled as a whole when the tab is shown, so the plate and the rows lift
+	-- in with it and only the right-hand column has a sweep of its own.
 	self.rewardScale = grower(panel)
-	local ps = Instance.new("UIStroke")
-	ps.Color = LINE
-	ps.Thickness = 1.6
-	ps.Transparency = 0.25
-	ps.Parent = panel
-	local pscrim = Instance.new("ImageLabel")
-	pscrim.Name = "Scrim"
-	pscrim.BackgroundTransparency = 1
-	pscrim.Image = KIT_SCRIM
-	pscrim.ScaleType = Enum.ScaleType.Stretch
-	pscrim.ImageTransparency = 0.3
-	pscrim.Size = UDim2.fromScale(1, 1)
-	pscrim.ZIndex = 0
-	pscrim.Parent = panel
-	roundOff(pscrim, 12)
-
-	kitSet(kitLabel(panel, "RewardTitle", RW_W, RW_H, 0, 34, RW_W, 46, GOLD), "FREE REWARDS")
 
 	-- THE REWARD, on its own plate. It is a placeholder and it says so: the
 	-- gift is the button's own glyph at size, which is what makes the sheet
@@ -2457,19 +2435,6 @@ local function buildRewardsPanel(self: any, parent: Instance)
 	self.rewardMsg = label(panel, "Message", RW_W, RW_H, 0, RW_H - 34 - RW_CLAIM_H - 30, RW_W, 16, GOLD)
 	self.rewardMsgUntil = 0
 
-	-- THE WAY OUT, in the corner and in the shop's red, which on this page is
-	-- already the colour of the one button that does not lead to a game.
-	local close = pillButton(panel, "Close", RW_W, RW_H,
-		RW_W - 16 - RW_CLOSE, 16, RW_CLOSE, RW_CLOSE, "X", RED, RED_LINE, POP_BACK)
-	close.Activated:Connect(function()
-		LobbyUI.closeRewards(self)
-	end)
-
-	shade.Activated:Connect(function()
-		popPress(POP_BACK)
-		LobbyUI.closeRewards(self)
-	end)
-
 	-- WHAT SPRINGS IN UNDER THE PANEL, in the order it is read. These are the
 	-- pills' OWN UIScale (pillButton hangs one on every button it makes) and not
 	-- a second one: only the first UIScale on an object does anything, so a
@@ -2494,9 +2459,10 @@ end
 -- experience except the Social Links on its page, so the source is pointed to
 -- by way of those rather than spelled out.
 --
--- Same modal furniture as FREE REWARDS -- shade, panel, corner X, backdrop
--- press to close, the same open and shut curves -- so it is the same piece of
--- furniture with different words on it.
+-- The modal furniture the FREE REWARDS sheet had before it moved into the
+-- shop -- shade, panel, corner X, backdrop press to close, the same open and
+-- shut curves -- so it is the same piece of furniture with different words on
+-- it.
 local CR_W, CR_H = 760, 380
 
 -- One line per entry, each one line tall, so every line of a kind renders at
@@ -2583,6 +2549,78 @@ local function buildCreditsPanel(self: any, parent: Instance)
 	shade.Activated:Connect(function()
 		popPress(POP_BACK)
 		LobbyUI.closeCredits(self)
+	end)
+end
+
+-- ------------------------------------------------------------ event pass ---
+--
+-- THE HALLOWEEN EVENT PASS SHEET (2026-10-08). EMPTY ON PURPOSE (owner:
+-- "have it empty for now, we can plan it after"): the credits sheet's
+-- furniture at the rewards sheet's size, so the pass has the room it will
+-- need, and nothing on it yet but its name and the way out.
+local function buildEventPanel(self: any, parent: Instance)
+	local shade = Instance.new("ImageButton")
+	shade.Name = "EventShade"
+	shade.Image = ""
+	shade.AutoButtonColor = false
+	shade.Size = UDim2.fromScale(1, 1)
+	shade.BackgroundColor3 = Color3.fromRGB(4, 6, 11)
+	shade.BackgroundTransparency = 1
+	shade.BorderSizePixel = 0
+	shade.Visible = false
+	shade.ZIndex = 20
+	shade.Parent = parent
+	self.eventShade = shade
+
+	local frost = Instance.new("ImageLabel")
+	frost.Name = "Frost"
+	frost.BackgroundTransparency = 1
+	frost.Image = KIT_SCRIM
+	frost.ScaleType = Enum.ScaleType.Stretch
+	frost.ImageTransparency = 0.72
+	frost.Size = UDim2.fromScale(1, 1)
+	frost.ZIndex = 0
+	frost.Parent = shade
+
+	local panel = Instance.new("Frame")
+	panel.Name = "EventPanel"
+	panel.BackgroundColor3 = PANEL
+	panel.BackgroundTransparency = 0.02
+	panel.BorderSizePixel = 0
+	panel.Active = true
+	place(panel, REF_W, REF_H, RW_X, RW_Y, RW_W, RW_H)
+	panel.Parent = shade
+	local pc = Instance.new("UICorner")
+	pc.CornerRadius = UDim.new(0, 12)
+	pc.Parent = panel
+	self.eventScale = grower(panel)
+	local ps = Instance.new("UIStroke")
+	ps.Color = LINE
+	ps.Thickness = 1.6
+	ps.Transparency = 0.25
+	ps.Parent = panel
+	local pscrim = Instance.new("ImageLabel")
+	pscrim.Name = "Scrim"
+	pscrim.BackgroundTransparency = 1
+	pscrim.Image = KIT_SCRIM
+	pscrim.ScaleType = Enum.ScaleType.Stretch
+	pscrim.ImageTransparency = 0.3
+	pscrim.Size = UDim2.fromScale(1, 1)
+	pscrim.ZIndex = 0
+	pscrim.Parent = panel
+	roundOff(pscrim, 12)
+
+	kitSet(kitLabel(panel, "EventTitle", RW_W, RW_H, 0, 34, RW_W, 46, EVENT_LINE), "HALLOWEEN EVENT PASS")
+
+	local close = pillButton(panel, "Close", RW_W, RW_H,
+		RW_W - 16 - RW_CLOSE, 16, RW_CLOSE, RW_CLOSE, "X", RED, RED_LINE, POP_BACK)
+	close.Activated:Connect(function()
+		LobbyUI.closeEvent(self)
+	end)
+
+	shade.Activated:Connect(function()
+		popPress(POP_BACK)
+		LobbyUI.closeEvent(self)
 	end)
 end
 
@@ -2910,6 +2948,7 @@ function LobbyUI.new(parent: Instance, myUserId: number): LobbyUI
 	self.rewardReady = false
 	self.rewardsOpen = false
 	self.creditsOpen = false
+	self.eventOpen = false
 	-- Whether this account has already taken the one grant. The SERVER owns
 	-- it (Data.freeReward) and pushes it down beside the patterns; nothing
 	-- here ever sets it from a press. nil until that push has landed, which
@@ -3103,17 +3142,23 @@ function LobbyUI.new(parent: Instance, myUserId: number): LobbyUI
 	-- has already stopped here -- so it leads, and the caption centres in what
 	-- is left rather than in the whole pill, which would slide it under the
 	-- box.
-	self.rewardsButton = pillButton(root, "FreeRewards", REF_W, REF_H,
-		FREE_X, BAR_Y, FREE_W, BAR_H, "FREE REWARDS", FREE_FILL, FREE_LINE)
-	-- The gift is 46 rather than 52 and sits tighter to the edge since the
+	--
+	-- THE HALLOWEEN EVENT PASS SINCE 2026-10-08 (owner). Same slot, same
+	-- glyph-then-words layout, orange instead of green, a pumpkin in the gift's
+	-- place. FREE REWARDS itself is a tab of the shop now (mountRewards).
+	-- TWO LINES, because three words in the caption's one 20-high line would
+	-- scale down to half the size of every other caption in the row.
+	self.eventButton = pillButton(root, "EventPass", REF_W, REF_H,
+		FREE_X, BAR_Y, FREE_W, BAR_H, "HALLOWEEN\nEVENT PASS", EVENT_FILL, EVENT_LINE)
+	-- The glyph is 46 rather than 52 and sits tighter to the edge since the
 	-- credits dot took a slice of this pill's width: the caption needed that
 	-- room more than the glyph did.
-	local gift = pixelImage(self.rewardsButton, "Gift", GIFT_ART)
-	place(gift, FREE_W, BAR_H, 12, 16, 46, 46)
-	local rewardsCap = self.rewardsButton:FindFirstChild("Caption") :: TextLabel
-	place(rewardsCap, FREE_W, BAR_H, 64, (BAR_H - 20) / 2, FREE_W - 72, 20)
-	self.rewardsButton.Activated:Connect(function()
-		LobbyUI.openRewards(self)
+	local pumpkin = pixelImage(self.eventButton, "Pumpkin", PUMPKIN_ART)
+	place(pumpkin, FREE_W, BAR_H, 12, 16, 46, 46)
+	local eventCap = self.eventButton:FindFirstChild("Caption") :: TextLabel
+	place(eventCap, FREE_W, BAR_H, 64, (BAR_H - 40) / 2, FREE_W - 72, 40)
+	self.eventButton.Activated:Connect(function()
+		LobbyUI.openEvent(self)
 	end)
 
 	-- ----------------------------------------------------------- credits --
@@ -3425,8 +3470,9 @@ function LobbyUI.new(parent: Instance, myUserId: number): LobbyUI
 	-- second because a room press made from the sheet opens it OVER the sheet
 	-- for the moment before the sheet closes.
 	buildListPanel(self, root)
-	buildRewardsPanel(self, root)
+	buildRewardsPanel(self)
 	buildCreditsPanel(self, root)
+	buildEventPanel(self, root)
 	buildRoomPanel(self, root)
 
 
@@ -3976,18 +4022,28 @@ end
 
 -- --------------------------------------------------------------- rewards ---
 
+-- HANDS THE REWARDS PAGE TO THE SHOP. `host` is the shop's FREE REWARDS page,
+-- authored `pw` x `ph`; the content (rows, plate, CLAIM) starts at `top` in
+-- it. Native size, centred across: the panel's own title band rides up
+-- behind the shop's tab strip, which is why the panel is not Active.
+function LobbyUI.mountRewards(self: LobbyUI, host: GuiObject, pw: number, ph: number, top: number)
+	local panel = self.rewardPanel
+	place(panel, pw, ph, (pw - RW_W) / 2, top - RW_TOP, RW_W, RW_H)
+	-- `place` authors from the corner, but grower already re-anchored this
+	-- panel to its centre, so the corner has to be converted the same way.
+	panel.Position = UDim2.fromScale(0.5, (top - RW_TOP + RW_H / 2) / ph)
+	panel.Parent = host
+end
+
+-- The tab was shown: the old sheet's arrival minus its backdrop, which is
+-- the shop's now. The shop owns whether it is visible; this only animates.
 function LobbyUI.openRewards(self: LobbyUI)
 	self.rewardsOpen = true
 	LobbyUI.paintRewards(self)
-	-- EVERYTHING SET TO ITS "NOT HERE YET" STATE BEFORE THE SHEET IS SHOWN, so
-	-- no frame of the finished panel is ever on screen first.
-	self.rewardShade.BackgroundTransparency = 1
 	self.rewardScale.Scale = RW_PANEL_FROM
 	for _, s in self.rewardSprings do
 		s.Scale = RW_ROW_FROM
 	end
-	self.rewardShade.Visible = true
-	tween(self.rewardShade, RW_OPEN_SHADE, { BackgroundTransparency = RW_SHADE_ALPHA })
 	tween(self.rewardScale, RW_OPEN_PANEL, { Scale = 1 })
 	for i, s in self.rewardSprings do
 		task.delay(RW_ROW_LEAD + (i - 1) * RW_ROW_STEP, function()
@@ -4009,14 +4065,30 @@ function LobbyUI.closeRewards(self: LobbyUI)
 	self.rewardsOpen = false
 	setText(self.rewardMsg, "")
 	self.rewardMsgUntil = 0
-	tween(self.rewardShade, RW_SHUT, { BackgroundTransparency = 1 })
-	tween(self.rewardScale, RW_SHUT, { Scale = RW_PANEL_FROM })
-	-- HIDDEN AFTER THE FADE, and only if nothing reopened it in the meantime:
-	-- a sheet shut and reopened inside those twelve hundredths would otherwise
-	-- be hidden by the close it had already outlived.
+end
+
+-- ------------------------------------------------------------ event pass ---
+
+-- The credits sheet's open and shut, on the event pass's own shade.
+function LobbyUI.openEvent(self: LobbyUI)
+	self.eventOpen = true
+	self.eventShade.BackgroundTransparency = 1
+	self.eventScale.Scale = RW_PANEL_FROM
+	self.eventShade.Visible = true
+	tween(self.eventShade, RW_OPEN_SHADE, { BackgroundTransparency = RW_SHADE_ALPHA })
+	tween(self.eventScale, RW_OPEN_PANEL, { Scale = 1 })
+end
+
+function LobbyUI.closeEvent(self: LobbyUI)
+	if not self.eventOpen then
+		return
+	end
+	self.eventOpen = false
+	tween(self.eventShade, RW_SHUT, { BackgroundTransparency = 1 })
+	tween(self.eventScale, RW_SHUT, { Scale = RW_PANEL_FROM })
 	task.delay(0.12, function()
-		if not self.rewardsOpen then
-			self.rewardShade.Visible = false
+		if not self.eventOpen then
+			self.eventShade.Visible = false
 		end
 	end)
 end

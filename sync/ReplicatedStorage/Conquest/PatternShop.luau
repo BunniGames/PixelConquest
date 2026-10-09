@@ -345,12 +345,15 @@ function PatternShop.new(parent: Instance): any
 	-- is always lit, which is the only job the title was doing. A third,
 	-- GAMEPASSES, joined 2026-09-21 (owner: "a 3rd tab that says gamepasses"),
 	-- relabelled BUILDINGS 2026-10-02 (owner). The id stays "passes".
+	-- A fourth, FREE REWARDS, 2026-10-08 (owner: "the free reward should be a
+	-- tab under the shop") -- its lobby pill became the event pass.
 	self.tabs = {}
 	self.tab = "patterns"
 	local TAB_SPECS = {
 		{ id = "patterns", text = "PATTERNS" },
 		{ id = "flags", text = "FLAGS" },
 		{ id = "passes", text = "BUILDINGS" },
+		{ id = "free", text = "FREE REWARDS" },
 	}
 	local TAB_W, TAB_H, TAB_GAP = 190, 36, 12
 	local tabX = (PANEL_W - (TAB_W * #TAB_SPECS + TAB_GAP * (#TAB_SPECS - 1))) / 2
@@ -494,6 +497,22 @@ function PatternShop.new(parent: Instance): any
 	passes.onSay = function(text: string)
 		PatternShop.say(self, text)
 	end
+
+	-- THE FREE REWARDS PAGE (2026-10-08). An empty page the panel's size; the
+	-- rewards themselves are LobbyUI's, because their state and wiring live
+	-- there, and LobbyClient mounts them in with LobbyUI.mountRewards using
+	-- the numbers below. `onFree` hears the page shown and hidden.
+	local freePage = Instance.new("Frame")
+	freePage.Name = "FreePage"
+	freePage.BackgroundTransparency = 1
+	freePage.BorderSizePixel = 0
+	freePage.Size = UDim2.fromScale(1, 1)
+	freePage.Visible = false
+	freePage.Parent = panel
+	self.freePage = freePage
+	self.freeW, self.freeH, self.freeTop = PANEL_W, PANEL_H, HEAD_Y + 6
+	self.freeShown = false
+	self.onFree = nil :: ((boolean) -> ())?
 
 	-- The one line this page ever says out loud, and only when a press could
 	-- not go through. Everything else is on the cards.
@@ -965,6 +984,19 @@ function PatternShop.open(self: any)
 	end
 end
 
+-- TELLS THE REWARDS PAGE IT WAS SHOWN OR HIDDEN, on the change only: hover
+-- repaints run through paintTabs too, and must not replay its arrival.
+local function syncFree(self: any)
+	local shown = self.tab == "free" and self.shade.Visible
+	if shown ~= self.freeShown then
+		self.freeShown = shown
+		local fn = self.onFree
+		if fn then
+			fn(shown)
+		end
+	end
+end
+
 -- WHICH TAB IS LIT. One page is visible at a time and only the visible one's
 -- button is drawn at full strength -- a strip where both look the same is two
 -- buttons, not a tab strip.
@@ -999,6 +1031,8 @@ function PatternShop.paintTabs(self: any)
 	self.patternsPage.Visible = self.tab == "patterns"
 	FlagShop.setVisible(self.flags, self.tab == "flags")
 	PassShop.setVisible(self.passes, self.tab == "passes")
+	self.freePage.Visible = self.tab == "free"
+	syncFree(self)
 end
 
 -- The flag tab's state, straight off the server, on the same contract as
@@ -1015,6 +1049,7 @@ end
 
 function PatternShop.close(self: any)
 	self.shade.Visible = false
+	syncFree(self)
 	-- The pass page's clip drawer stops with the shop: a clip stepping
 	-- under a hidden shade would be a frame loop for nobody (2026-09-22).
 	PassShop.setVisible(self.passes, false)

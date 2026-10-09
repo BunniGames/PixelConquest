@@ -54,6 +54,17 @@ local shop = PatternShop.new(screen)
 page.onPatterns = function()
 	shop:open()
 end
+-- FREE REWARDS IS A TAB OF THE SHOP (2026-10-08). The page's rewards panel
+-- is laid onto the shop's FREE REWARDS page, and plays its arrival when that
+-- tab is shown.
+page:mountRewards(shop.freePage, shop.freeW, shop.freeH, shop.freeTop)
+shop.onFree = function(shown: boolean)
+	if shown then
+		page:openRewards()
+	else
+		page:closeRewards()
+	end
+end
 
 -- RANKED (2026-10-05). Built in the background: its remote is made by the
 -- RankedLobby server script, and the page must never wait on it. Pressing
@@ -151,8 +162,8 @@ UserInputService.InputBegan:Connect(function(input, processed)
 	end
 	if shop:isOpen() then
 		shop:close()
-	elseif page.rewardsOpen then
-		page:closeRewards()
+	elseif page.eventOpen then
+		page:closeEvent()
 	elseif page.creditsOpen then
 		page:closeCredits()
 	elseif page.listOpen then
