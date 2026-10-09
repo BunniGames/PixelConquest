@@ -370,63 +370,50 @@ function RankedUI.new(screen: ScreenGui, onLeaveBoard: (() -> ())?)
 	bst.Thickness = 1.6
 	bst.Transparency = 0.3
 	bst.Parent = bsheet
-	-- THE SEASON BANNER (2026-10-08), the whole of "how season rewards
-	-- work" in one strip: the skin itself (the swatch IS the pitch), when the
-	-- season ends, what the top 100 get, and on the right where YOU stand --
-	-- your place, or exactly what is between you and the board.
-	local banner = Instance.new("Frame")
-	banner.Name = "Season"
-	banner.BackgroundColor3 = VIOLET
-	banner.BackgroundTransparency = 0.55
-	banner.BorderSizePixel = 0
-	place(banner, BW, BH, 10, 8, BW - 20, 58)
-	banner.Parent = bsheet
-	roundOff(banner, 8)
-	local bnStroke = Instance.new("UIStroke")
-	bnStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
-	bnStroke.Color = VIOLET_LINE
-	bnStroke.Thickness = 1.4
-	bnStroke.Transparency = 0.3
-	bnStroke.Parent = banner
-	local BNW, BNH = BW - 20, 58
-	local skin = Instance.new("ImageLabel")
-	skin.Name = "Skin"
-	skin.BackgroundTransparency = 1
-	skin.ResampleMode = Enum.ResamplerMode.Pixelated
-	skin.ScaleType = Enum.ScaleType.Crop
-	place(skin, BNW, BNH, 6, 5, 48, 48)
-	skin.Parent = banner
-	roundOff(skin, 6)
-	pcall(function()
-		skin.ImageContent = Content.fromObject(Patterns.swatch(Patterns.indexOf(Ranked.SEASON_PATTERN)))
-	end)
-	self.seasonTitle = label(banner, "Title", BNW, BNH, 64, 7, 420, 20, GOLD, Enum.TextXAlignment.Left, kit.FONT_BOLD)
-	local def = Patterns.byKey(Ranked.SEASON_PATTERN)
-	label(banner, "Prize", BNW, BNH, 64, 31, 410, 18, INK, Enum.TextXAlignment.Left, kit.FONT_BOLD).Text =
-		string.format("TOP %d AT SEASON END WIN  $%s + %s SKIN", Ranked.SEASON_TOP, short(Ranked.SEASON_MONEY),
-			string.upper(def and def.name or "SEASON"))
-	self.seasonYou = label(banner, "You", BNW, BNH, BNW - 14 - 330, 31, 330, 18, INK_DIM, Enum.TextXAlignment.Right, kit.FONT_BOLD)
-	local bback = pillButton(banner, "Back", BNW, BNH, BNW - 10 - 84, 3, 84, 26, "BACK")
+	-- One plain header line: the season and its clock. The prizes are not
+	-- spelled out anywhere -- each row wears its own (owner, 2026-10-08:
+	-- "remove the banner. Next to the name ...").
+	self.seasonTitle = label(bsheet, "Title", BW, BH, 16, 12, 500, 20, GOLD, Enum.TextXAlignment.Left, kit.FONT_BOLD)
+	local bback = pillButton(bsheet, "Back", BW, BH, BW - 14 - 84, 8, 84, 28, "BACK")
 	bback.Activated:Connect(function()
 		self:closeBoard()
 	end)
+	local skinImage: EditableImage? = nil
+	pcall(function()
+		skinImage = Patterns.swatch(Patterns.indexOf(Ranked.SEASON_PATTERN))
+	end)
 	self.boardRows = {}
-	local BROWS, RH, GAP = 10, 30, 3
+	local BROWS, RH, GAP = 10, 34, 4
 	local RWb = BW - 32
+	-- THE PRIZE COLUMN, right after the name: the skin for a place that
+	-- earns it, then the cash. Fixed x, so the amounts read down as a column.
+	local PX = RWb - 130 - 170
 	for i = 1, BROWS do
 		local row = Instance.new("Frame")
 		row.Name = "Row" .. i
 		row.BackgroundColor3 = VIOLET
 		row.BackgroundTransparency = 1
 		row.BorderSizePixel = 0
-		place(row, BW, BH, 16, 76 + (i - 1) * (RH + GAP), RWb, RH)
+		place(row, BW, BH, 16, 44 + (i - 1) * (RH + GAP), RWb, RH)
 		row.Parent = bsheet
 		roundOff(row, 8)
-		local pos = label(row, "Pos", RWb, RH, 8, 6, 52, 18, INK_DIM, Enum.TextXAlignment.Left, kit.FONT_BOLD)
-		local em = emblem(row, "Emblem", RWb, RH, 64, 2, 26, 1)
-		local nm = label(row, "Name", RWb, RH, 104, 6, RWb - 104 - 140, 18, INK, Enum.TextXAlignment.Left, kit.FONT_BOLD)
-		local rr = label(row, "RR", RWb, RH, RWb - 130, 6, 120, 18, INK, Enum.TextXAlignment.Right, kit.FONT_BOLD)
-		table.insert(self.boardRows, { row = row, pos = pos, emblem = em, name = nm, rr = rr })
+		local pos = label(row, "Pos", RWb, RH, 8, 8, 52, 18, INK_DIM, Enum.TextXAlignment.Left, kit.FONT_BOLD)
+		local em = emblem(row, "Emblem", RWb, RH, 64, 2, 30, 1)
+		local nm = label(row, "Name", RWb, RH, 104, 8, PX - 104 - 12, 18, INK, Enum.TextXAlignment.Left, kit.FONT_BOLD)
+		local skin = Instance.new("ImageLabel")
+		skin.Name = "Skin"
+		skin.BackgroundTransparency = 1
+		skin.ResampleMode = Enum.ResamplerMode.Pixelated
+		skin.ScaleType = Enum.ScaleType.Crop
+		place(skin, RWb, RH, PX, 5, 24, 24)
+		skin.Parent = row
+		roundOff(skin, 4)
+		if skinImage then
+			skin.ImageContent = Content.fromObject(skinImage)
+		end
+		local cash = label(row, "Cash", RWb, RH, PX + 32, 8, 120, 18, kit.GAIN, Enum.TextXAlignment.Left, kit.FONT_BOLD)
+		local rr = label(row, "RR", RWb, RH, RWb - 130, 8, 120, 18, INK, Enum.TextXAlignment.Right, kit.FONT_BOLD)
+		table.insert(self.boardRows, { row = row, pos = pos, emblem = em, name = nm, skin = skin, cash = cash, rr = rr })
 	end
 	local bprev = pillButton(bsheet, "Prev", BW, BH, BW / 2 - 70, BH - 38, 40, 28, "<")
 	local bnext = pillButton(bsheet, "Next", BW, BH, BW / 2 + 30, BH - 38, 40, 28, ">")
@@ -558,6 +545,7 @@ function RankedUI.new(screen: ScreenGui, onLeaveBoard: (() -> ())?)
 	pcall(function()
 		spSkin.ImageContent = Content.fromObject(Patterns.swatch(Patterns.indexOf(Ranked.SEASON_PATTERN)))
 	end)
+	self.spSkin = spSkin
 	self.spTitle = label(spop, "Title", SW, SH, 132, 16, SW - 148, 24, GOLD, Enum.TextXAlignment.Left, kit.FONT_BOLD)
 	self.spMoney = label(spop, "Money", SW, SH, 132, 46, SW - 148, 20, kit.GAIN, Enum.TextXAlignment.Left, kit.FONT_BOLD)
 	self.spSkinText = label(spop, "SkinText", SW, SH, 132, 68, SW - 148, 18, VIOLET_LINE, Enum.TextXAlignment.Left, kit.FONT_BOLD)
@@ -745,6 +733,14 @@ function RankedUI.paint(self: any)
 		setText(self.spMoney, "+$" .. short(tonumber(n.money) or 0) .. " MONEY")
 		local def = Patterns.byKey(Ranked.SEASON_PATTERN)
 		setText(self.spSkinText, n.skin and ("+ " .. string.upper(def and def.name or "SEASON") .. " SKIN") or "")
+		-- The swatch is the skin; a cash-only place has no picture to show.
+		local top = (tonumber(n.pos) or 999) <= Ranked.SEASON_SKIN_TOP
+		self.spSkin.Visible = top
+		local tx = top and 132 or 24
+		for _, t in { self.spTitle, self.spMoney, self.spSkinText } do
+			t.Position = UDim2.fromScale(tx / 460, t.Position.Y.Scale)
+			t.Size = UDim2.fromScale((460 - tx - 16) / 460, t.Size.Y.Scale)
+		end
 		self.spop.Visible = true
 	end
 
@@ -909,40 +905,11 @@ local function untilText(secs: number): string
 	return string.format("%dM", math.max(1, m))
 end
 
--- The banner: the season and its clock, and where the local player stands.
+-- The header: the season and its clock.
 function RankedUI.paintSeason(self: any)
-	local list = self.board
 	local season = self.boardSeason or Ranked.season()
 	local ends = self.boardEnds or Ranked.seasonEnds(season)
 	setText(self.seasonTitle, string.format("SEASON %d  -  ENDS IN %s", season, untilText(ends - os.time())))
-	if not list then
-		setText(self.seasonYou, "")
-		return
-	end
-	local me = Players.LocalPlayer
-	local mine: number? = nil
-	for i, e in list do
-		if e.id == me.UserId then
-			mine = i
-			break
-		end
-	end
-	local view = self.state and self.state.me
-	local sgames = view and tonumber(view.sgames) or 0
-	local need = Ranked.SEASON_MIN_GAMES - sgames
-	local text, color
-	if mine then
-		text, color = string.format("YOU ARE #%d", mine), kit.GAIN
-	elseif need > 0 then
-		text, color = string.format("PLAY %d MORE RANKED %s TO ENTER", need, need == 1 and "GAME" or "GAMES"), INK_DIM
-	elseif #list >= Ranked.SEASON_TOP then
-		text, color = string.format("REACH %d RR TO ENTER", list[Ranked.SEASON_TOP].rr + 1), INK_DIM
-	else
-		-- Qualified, and the board has room: the cache just has not caught up.
-		text, color = "YOU WILL BE ON THE BOARD SHORTLY", INK_DIM
-	end
-	setText(self.seasonYou, text)
-	self.seasonYou.TextColor3 = color
 end
 
 function RankedUI.paintBoard(self: any)
@@ -964,6 +931,9 @@ function RankedUI.paintBoard(self: any)
 			setText(row.pos, "#" .. n)
 			row.pos.TextColor3 = n <= 3 and GOLD or INK_DIM
 			setText(row.name, tostring(e.name))
+			local money, skin = Ranked.seasonPrize(n)
+			row.skin.Visible = skin
+			setText(row.cash, money > 0 and ("$" .. short(money)) or "")
 			setText(row.rr, tostring(e.rr) .. " RR")
 			row.rr.TextColor3 = Ranked.rung(rank).color
 			row.row.BackgroundTransparency = e.id == me.UserId and 0.35 or 1

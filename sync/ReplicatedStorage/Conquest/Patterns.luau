@@ -336,7 +336,7 @@ Patterns.TIERS = {
 		name = "SEASON",
 		color = Color3.fromRGB(196, 140, 255),
 		price = 0,
-		blurb = "Finish a ranked season in the top 100.",
+		blurb = "Finish a ranked season in the top 10.",
 	},
 } :: { Tier }
 
@@ -413,7 +413,7 @@ export type Def = {
 	-- that exception costs and what it is not allowed to touch.
 	rainbow: boolean?,
 	-- A RANKED SEASON REWARD (2026-10-08), a FIFTH ownership axis: granted to
-	-- the top 100 of a finished season by RankedLobby and never sold. mayBuy
+	-- the top 10 of a finished season by RankedLobby and never sold. mayBuy
 	-- refuses it and `standing` is never affordable, for the reward-skin
 	-- reason (its tier price is 0).
 	season: boolean?,
@@ -869,7 +869,7 @@ Patterns.LIST = {
 	},
 
 	-- ---------------------------------------------------- season reward --
-	-- CROWNS (2026-10-08): the top 100 of every ranked season. Two gold
+	-- CROWNS (2026-10-08): the top 10 of every ranked season. Two gold
 	-- crowns to a 16-tile block on a half-step stagger, so they read as a
 	-- lattice rather than rows; ruby and sapphire set in each band, a pearl
 	-- on the middle point, a drop shadow down and right, and a four-point
@@ -1252,7 +1252,7 @@ function Patterns.mayBuy(def: Def, owned: { [string]: boolean }?, money: number,
 		return false, `{def.name} comes from Free Rewards.`
 	end
 	if Patterns.isSeason(def) then
-		return false, `{def.name} is a ranked season reward -- finish in the top 100.`
+		return false, `{def.name} is a ranked season reward -- finish in the top 10.`
 	end
 	if Patterns.isVip(def) then
 		return false, `{def.name} comes with VIP.`

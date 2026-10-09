@@ -291,13 +291,37 @@ Ranked.BOARD_SIZE = 100
 -- then left alone wins nothing. Each season has its own OrderedDataStore
 -- (seasonStore), written after every rated match once the player qualifies;
 -- when the month ends that store is frozen and its top SEASON_TOP are paid
--- SEASON_MONEY and the SEASON_PATTERN skin the next time they join any server
--- (RankedLobby.paySeasons).
+-- (seasonPrize) the next time they join any server (RankedLobby.paySeasons).
 Ranked.SEASON_YEAR, Ranked.SEASON_MONTH = 2026, 10
 Ranked.SEASON_TOP = 100
-Ranked.SEASON_MONEY = 100000
 Ranked.SEASON_PATTERN = "crowns"
 Ranked.SEASON_MIN_GAMES = 5
+
+-- THE PRIZE LADDER (owner, 2026-10-08: "top 10 players get the new skin. and
+-- 100k in cash. the other 90 get slightly less cash as it goes on"). Places
+-- 1..SEASON_SKIN_TOP: the skin and SEASON_MONEY. Below that the cash steps
+-- down evenly from SEASON_MONEY_HI at the next place to SEASON_MONEY_LO at
+-- SEASON_TOP, rounded to SEASON_MONEY_ROUND (about 900 a place).
+Ranked.SEASON_SKIN_TOP = 10
+Ranked.SEASON_MONEY = 100000
+Ranked.SEASON_MONEY_HI = 90000
+Ranked.SEASON_MONEY_LO = 10000
+Ranked.SEASON_MONEY_ROUND = 500
+
+-- (cash, skin) for a finishing place; (0, false) off the board.
+function Ranked.seasonPrize(pos: number): (number, boolean)
+	if pos < 1 or pos > Ranked.SEASON_TOP then
+		return 0, false
+	end
+	if pos <= Ranked.SEASON_SKIN_TOP then
+		return Ranked.SEASON_MONEY, true
+	end
+	local first, last = Ranked.SEASON_SKIN_TOP + 1, Ranked.SEASON_TOP
+	local t = if last > first then (pos - first) / (last - first) else 0
+	local cash = Ranked.SEASON_MONEY_HI + (Ranked.SEASON_MONEY_LO - Ranked.SEASON_MONEY_HI) * t
+	local r = Ranked.SEASON_MONEY_ROUND
+	return math.floor(cash / r + 0.5) * r, false
+end
 
 -- The season a unix time falls in (now when omitted). DateTime, never
 -- os.date/os.time with a table: those read the machine's LOCAL zone.

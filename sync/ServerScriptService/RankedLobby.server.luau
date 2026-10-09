@@ -401,7 +401,8 @@ end
 
 -- ================================================================ payout ==
 -- A FINISHED SEASON PAYS ITS TOP Ranked.SEASON_TOP the next time each of them
--- is in any server: SEASON_MONEY plus the SEASON_PATTERN skin. Checked on
+-- is in any server: Ranked.seasonPrize (cash, plus the skin for the top
+-- SEASON_SKIN_TOP). Checked on
 -- join and every PAY_EVERY s for everyone here (so a player online at the
 -- turn of the month is paid without rejoining), for the last SEASON_LOOKBACK
 -- seasons (a month away still collects). A season is read only SETTLE_AFTER
@@ -476,19 +477,22 @@ local function paySeasons(player: Player)
 					if type(profile.patterns) ~= "table" then
 						profile.patterns = {}
 					end
+					local cash, wins = Ranked.seasonPrize(pos)
 					local had = profile.patterns[Ranked.SEASON_PATTERN] == true
-					profile.patterns[Ranked.SEASON_PATTERN] = true
-					Data.addMoney(player, Ranked.SEASON_MONEY)
+					if wins then
+						profile.patterns[Ranked.SEASON_PATTERN] = true
+					end
+					Data.addMoney(player, cash)
 					local prevNotice = b.snotice
-					b.snotice = { season = s, pos = pos, money = Ranked.SEASON_MONEY, skin = not had }
+					b.snotice = { season = s, pos = pos, money = cash, skin = wins and not had }
 					if Data.flush(player) then
 						paid = true
 						print(("[Ranked] season %d: %s finished #%d -- paid"):format(s, player.Name, pos))
 					else
 						b.spaid[key] = nil
 						b.snotice = prevNotice
-						profile.money = math.max(0, (tonumber(profile.money) or 0) - Ranked.SEASON_MONEY)
-						if not had then
+						profile.money = math.max(0, (tonumber(profile.money) or 0) - cash)
+						if wins and not had then
 							profile.patterns[Ranked.SEASON_PATTERN] = nil
 						end
 						warn("[Ranked] season payout not saved for " .. player.Name .. " -- retrying later")
