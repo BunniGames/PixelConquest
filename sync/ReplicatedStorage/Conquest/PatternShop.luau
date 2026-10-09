@@ -638,6 +638,18 @@ function PatternShop.paintCard(self: any, entry: any)
 		entry.state.TextColor3 = kit.GAIN
 		entry.swatch.ImageTransparency = 0
 		entry.name.TextColor3 = kit.INK
+	elseif st.season then
+		-- A RANKED SEASON REWARD: names the finish it takes instead of a
+		-- price, in the ranked violet, with the swatch at full strength --
+		-- what it looks like is the reason to climb.
+		local tint = Patterns.tier(def.tier).color
+		entry.stroke.Color = tint
+		entry.stroke.Thickness = 2.2
+		entry.stroke.Transparency = 0.1
+		setText(entry.state, "TOP 100")
+		entry.state.TextColor3 = tint
+		entry.swatch.ImageTransparency = 0
+		entry.name.TextColor3 = kit.INK
 	elseif st.vip then
 		-- COMES WITH THE PASS. An owner never reaches this branch: the grant
 		-- writes the pattern into the profile, so they arrive at `st.owned`
@@ -788,6 +800,12 @@ function PatternShop.press(self: any, entry: any)
 		-- card that looks pressable and does nothing reads as broken.
 		Sfx.play("Deny")
 		PatternShop.say(self, string.upper(def.name) .. " COMES FROM FREE REWARDS.")
+		return
+	end
+
+	if st.season then
+		Sfx.play("Deny")
+		PatternShop.say(self, string.upper(def.name) .. " GOES TO THE TOP 100 OF EACH RANKED SEASON.")
 		return
 	end
 

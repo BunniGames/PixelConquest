@@ -372,6 +372,21 @@ local function sendPatterns(player: Player)
 	sendFlags(player)
 end
 
+-- ANOTHER SCRIPT MOVED THIS PLAYER'S SKINS OR MONEY (2026-10-08: the ranked
+-- season payout in RankedLobby). It fires this and the shop and balance are
+-- re-sent the same way a purchase re-sends them.
+do
+	local ServerStorage = game:GetService("ServerStorage")
+	local be = ServerStorage:FindFirstChild("ConquestPatternsRefresh") :: BindableEvent? or Instance.new("BindableEvent")
+	;(be :: BindableEvent).Name = "ConquestPatternsRefresh"
+	;(be :: BindableEvent).Parent = ServerStorage
+	;(be :: BindableEvent).Event:Connect(function(player: Player)
+		if typeof(player) == "Instance" and player:IsA("Player") and player.Parent then
+			sendPatterns(player)
+		end
+	end)
+end
+
 -- WHAT THIS PLAYER'S PASSES OPEN IN A PRIVATE ROOM (2026-09-11): 0, or
 -- PrivateLobby.TIER_HOST, or TIER_ADVANCED. ADVANCED is HOST plus the modes,
 -- so it is asked first and answers for both. `ownsPass` YIELDS on a cold

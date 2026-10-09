@@ -85,6 +85,8 @@ local PATTERN_OF = Patterns.OWNER
 -- the reason PATTERN_OF is: the test below runs once per owned tile, and a
 -- comparison against an upvalue beats a table index into the module.
 local RAINBOW_PAT = Patterns.RAINBOW_INDEX
+-- Painted-art patterns (the CROWNS season skin): nil for every other index.
+local ART_OF = Patterns.ART
 
 -- A contested seam is the two nations' border colours AVERAGED -- and nothing
 -- else. It is tempting to darken it further so it outranks a quiet coastal
@@ -548,6 +550,10 @@ function Renderer.recolor(self: Renderer, i: number)
 				-- others, which is what keeps a rainbow empire's outline in its
 				-- own colour -- the sweep never reaches the border.
 				rr, gg, bb = Patterns.rainbow(rr, gg, bb, x, y)
+			elseif ART_OF[pat] then
+				-- The second hue exception: gold laid over the fill. Same
+				-- branch, so it never reaches the border either.
+				rr, gg, bb = Patterns.paint(pat, rr, gg, bb, x, y)
 			elseif pat > 1 then
 				local k = Patterns.sample(pat, x, y)
 				if k ~= 0 then

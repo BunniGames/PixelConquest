@@ -370,14 +370,48 @@ function RankedUI.new(screen: ScreenGui, onLeaveBoard: (() -> ())?)
 	bst.Thickness = 1.6
 	bst.Transparency = 0.3
 	bst.Parent = bsheet
-	label(bsheet, "Title", BW, BH, 16, 12, 300, 20, GOLD, Enum.TextXAlignment.Left, kit.FONT_BOLD).Text =
-		"TOP " .. Ranked.BOARD_SIZE
-	local bback = pillButton(bsheet, "Back", BW, BH, BW - 14 - 84, 8, 84, 28, "BACK")
+	-- THE SEASON BANNER (2026-10-08), the whole of "how season rewards
+	-- work" in one strip: the skin itself (the swatch IS the pitch), when the
+	-- season ends, what the top 100 get, and on the right where YOU stand --
+	-- your place, or exactly what is between you and the board.
+	local banner = Instance.new("Frame")
+	banner.Name = "Season"
+	banner.BackgroundColor3 = VIOLET
+	banner.BackgroundTransparency = 0.55
+	banner.BorderSizePixel = 0
+	place(banner, BW, BH, 10, 8, BW - 20, 58)
+	banner.Parent = bsheet
+	roundOff(banner, 8)
+	local bnStroke = Instance.new("UIStroke")
+	bnStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+	bnStroke.Color = VIOLET_LINE
+	bnStroke.Thickness = 1.4
+	bnStroke.Transparency = 0.3
+	bnStroke.Parent = banner
+	local BNW, BNH = BW - 20, 58
+	local skin = Instance.new("ImageLabel")
+	skin.Name = "Skin"
+	skin.BackgroundTransparency = 1
+	skin.ResampleMode = Enum.ResamplerMode.Pixelated
+	skin.ScaleType = Enum.ScaleType.Crop
+	place(skin, BNW, BNH, 6, 5, 48, 48)
+	skin.Parent = banner
+	roundOff(skin, 6)
+	pcall(function()
+		skin.ImageContent = Content.fromObject(Patterns.swatch(Patterns.indexOf(Ranked.SEASON_PATTERN)))
+	end)
+	self.seasonTitle = label(banner, "Title", BNW, BNH, 64, 7, 420, 20, GOLD, Enum.TextXAlignment.Left, kit.FONT_BOLD)
+	local def = Patterns.byKey(Ranked.SEASON_PATTERN)
+	label(banner, "Prize", BNW, BNH, 64, 31, 410, 18, INK, Enum.TextXAlignment.Left, kit.FONT_BOLD).Text =
+		string.format("TOP %d AT SEASON END WIN  $%s + %s SKIN", Ranked.SEASON_TOP, short(Ranked.SEASON_MONEY),
+			string.upper(def and def.name or "SEASON"))
+	self.seasonYou = label(banner, "You", BNW, BNH, BNW - 14 - 330, 31, 330, 18, INK_DIM, Enum.TextXAlignment.Right, kit.FONT_BOLD)
+	local bback = pillButton(banner, "Back", BNW, BNH, BNW - 10 - 84, 3, 84, 26, "BACK")
 	bback.Activated:Connect(function()
 		self:closeBoard()
 	end)
 	self.boardRows = {}
-	local BROWS, RH, GAP = 10, 34, 4
+	local BROWS, RH, GAP = 10, 30, 3
 	local RWb = BW - 32
 	for i = 1, BROWS do
 		local row = Instance.new("Frame")
@@ -385,13 +419,13 @@ function RankedUI.new(screen: ScreenGui, onLeaveBoard: (() -> ())?)
 		row.BackgroundColor3 = VIOLET
 		row.BackgroundTransparency = 1
 		row.BorderSizePixel = 0
-		place(row, BW, BH, 16, 44 + (i - 1) * (RH + GAP), RWb, RH)
+		place(row, BW, BH, 16, 76 + (i - 1) * (RH + GAP), RWb, RH)
 		row.Parent = bsheet
 		roundOff(row, 8)
-		local pos = label(row, "Pos", RWb, RH, 8, 8, 52, 18, INK_DIM, Enum.TextXAlignment.Left, kit.FONT_BOLD)
-		local em = emblem(row, "Emblem", RWb, RH, 64, 2, 30, 1)
-		local nm = label(row, "Name", RWb, RH, 104, 8, RWb - 104 - 140, 18, INK, Enum.TextXAlignment.Left, kit.FONT_BOLD)
-		local rr = label(row, "RR", RWb, RH, RWb - 130, 8, 120, 18, INK, Enum.TextXAlignment.Right, kit.FONT_BOLD)
+		local pos = label(row, "Pos", RWb, RH, 8, 6, 52, 18, INK_DIM, Enum.TextXAlignment.Left, kit.FONT_BOLD)
+		local em = emblem(row, "Emblem", RWb, RH, 64, 2, 26, 1)
+		local nm = label(row, "Name", RWb, RH, 104, 6, RWb - 104 - 140, 18, INK, Enum.TextXAlignment.Left, kit.FONT_BOLD)
+		local rr = label(row, "RR", RWb, RH, RWb - 130, 6, 120, 18, INK, Enum.TextXAlignment.Right, kit.FONT_BOLD)
 		table.insert(self.boardRows, { row = row, pos = pos, emblem = em, name = nm, rr = rr })
 	end
 	local bprev = pillButton(bsheet, "Prev", BW, BH, BW / 2 - 70, BH - 38, 40, 28, "<")
@@ -495,6 +529,50 @@ function RankedUI.new(screen: ScreenGui, onLeaveBoard: (() -> ())?)
 		pop.Visible = false
 	end)
 
+	-- ------------------------------------------- season payout (outside)
+	-- Shown once, wherever the player is in the lobby, the first time the
+	-- server says a finished season paid them; OK tells it so ("seasonSeen").
+	local SW, SH = 460, 132
+	local spop = Instance.new("Frame")
+	spop.Name = "SeasonReward"
+	spop.BackgroundColor3 = kit.PANEL
+	spop.BackgroundTransparency = 0.02
+	spop.BorderSizePixel = 0
+	spop.Visible = false
+	spop.ZIndex = 30
+	place(spop, REF_W, REF_H, (REF_W - SW) / 2, (REF_H - SH) / 2, SW, SH)
+	spop.Parent = screen
+	roundOff(spop, 12)
+	local spStroke = Instance.new("UIStroke")
+	spStroke.Color = VIOLET_LINE
+	spStroke.Thickness = 2
+	spStroke.Parent = spop
+	local spSkin = Instance.new("ImageLabel")
+	spSkin.Name = "Skin"
+	spSkin.BackgroundTransparency = 1
+	spSkin.ResampleMode = Enum.ResamplerMode.Pixelated
+	spSkin.ScaleType = Enum.ScaleType.Crop
+	place(spSkin, SW, SH, 16, 16, 100, 100)
+	spSkin.Parent = spop
+	roundOff(spSkin, 8)
+	pcall(function()
+		spSkin.ImageContent = Content.fromObject(Patterns.swatch(Patterns.indexOf(Ranked.SEASON_PATTERN)))
+	end)
+	self.spTitle = label(spop, "Title", SW, SH, 132, 16, SW - 148, 24, GOLD, Enum.TextXAlignment.Left, kit.FONT_BOLD)
+	self.spMoney = label(spop, "Money", SW, SH, 132, 46, SW - 148, 20, kit.GAIN, Enum.TextXAlignment.Left, kit.FONT_BOLD)
+	self.spSkinText = label(spop, "SkinText", SW, SH, 132, 68, SW - 148, 18, VIOLET_LINE, Enum.TextXAlignment.Left, kit.FONT_BOLD)
+	local spOk = pillButton(spop, "Ok", SW, SH, SW - 16 - 96, SH - 16 - 32, 96, 32, "OK", VIOLET, VIOLET_LINE)
+	for _, d in spop:GetDescendants() do
+		if d:IsA("GuiObject") then
+			d.ZIndex = math.max(d.ZIndex, 31)
+		end
+	end
+	self.spop = spop
+	spOk.Activated:Connect(function()
+		spop.Visible = false
+		self.remote:FireServer("seasonSeen")
+	end)
+
 	-- ------------------------------------------------------------ remote
 	self.remote.OnClientEvent:Connect(function(kind: string, payload: any)
 		if kind == "state" then
@@ -508,7 +586,9 @@ function RankedUI.new(screen: ScreenGui, onLeaveBoard: (() -> ())?)
 				self:paintFriends()
 			end
 		elseif kind == "board" and type(payload) == "table" then
-			self.board = payload
+			self.board = type(payload.rows) == "table" and payload.rows or {}
+			self.boardSeason = tonumber(payload.season) or 0
+			self.boardEnds = tonumber(payload.ends) or 0
 			self:paintBoard()
 		elseif kind == "toast" then
 			self:say(tostring(payload))
@@ -549,6 +629,9 @@ function RankedUI.new(screen: ScreenGui, onLeaveBoard: (() -> ())?)
 				local have = self.searchCount or #(st.members or { 1 })
 				setText(self.findCaption, string.format("SEARCHING %s  -  %d/%d  -  CANCEL",
 					mmss(os.time() - (st.since or os.time())), have, need))
+			end
+			if self.boardSheet.Visible and self.board then
+				self:paintSeason()
 			end
 			if self.toastUntil > 0 and os.clock() > self.toastUntil then
 				self.toastUntil = 0
@@ -653,6 +736,16 @@ function RankedUI.paint(self: any)
 			row.row.Visible = false
 			row.id = 0
 		end
+	end
+
+	-- An unseen season payout.
+	local n = st and st.notice
+	if type(n) == "table" and not self.spop.Visible then
+		setText(self.spTitle, string.format("SEASON %d  -  YOU FINISHED #%d", tonumber(n.season) or 0, tonumber(n.pos) or 0))
+		setText(self.spMoney, "+$" .. short(tonumber(n.money) or 0) .. " MONEY")
+		local def = Patterns.byKey(Ranked.SEASON_PATTERN)
+		setText(self.spSkinText, n.skin and ("+ " .. string.upper(def and def.name or "SEASON") .. " SKIN") or "")
+		self.spop.Visible = true
 	end
 
 	-- Pending invites arrive inside state too (a player who opens the sheet
@@ -805,7 +898,55 @@ function RankedUI.closeBoard(self: any)
 	self.boardSheet.Visible = false
 end
 
+local function untilText(secs: number): string
+	secs = math.max(0, math.floor(secs))
+	local d, h, m = secs // 86400, (secs % 86400) // 3600, (secs % 3600) // 60
+	if d > 0 then
+		return string.format("%dD %dH", d, h)
+	elseif h > 0 then
+		return string.format("%dH %dM", h, m)
+	end
+	return string.format("%dM", math.max(1, m))
+end
+
+-- The banner: the season and its clock, and where the local player stands.
+function RankedUI.paintSeason(self: any)
+	local list = self.board
+	local season = self.boardSeason or Ranked.season()
+	local ends = self.boardEnds or Ranked.seasonEnds(season)
+	setText(self.seasonTitle, string.format("SEASON %d  -  ENDS IN %s", season, untilText(ends - os.time())))
+	if not list then
+		setText(self.seasonYou, "")
+		return
+	end
+	local me = Players.LocalPlayer
+	local mine: number? = nil
+	for i, e in list do
+		if e.id == me.UserId then
+			mine = i
+			break
+		end
+	end
+	local view = self.state and self.state.me
+	local sgames = view and tonumber(view.sgames) or 0
+	local need = Ranked.SEASON_MIN_GAMES - sgames
+	local text, color
+	if mine then
+		text, color = string.format("YOU ARE #%d", mine), kit.GAIN
+	elseif need > 0 then
+		text, color = string.format("PLAY %d MORE RANKED %s TO ENTER", need, need == 1 and "GAME" or "GAMES"), INK_DIM
+	elseif #list >= Ranked.SEASON_TOP then
+		text, color = string.format("REACH %d RR TO ENTER", list[Ranked.SEASON_TOP].rr + 1), INK_DIM
+	else
+		-- Qualified, and the board has room: the cache just has not caught up.
+		text, color = "YOU WILL BE ON THE BOARD SHORTLY", INK_DIM
+	end
+	setText(self.seasonYou, text)
+	self.seasonYou.TextColor3 = color
+end
+
 function RankedUI.paintBoard(self: any)
+	self:paintSeason()
 	local list = self.board
 	local per = #self.boardRows
 	local pages = math.max(1, math.ceil((list and #list or 0) / per))

@@ -240,13 +240,14 @@ local function opposingAverage(c: Ctx, side: number): number
 	return n > 0 and sum / n or Ranked.START
 end
 
--- The leaderboard's copy of a player's RR (Ranked.BOARD_STORE). Off the
--- tick: a DataStore write yields.
-local boardStore = DataStoreService:GetOrderedDataStore(Ranked.BOARD_STORE)
-local function postRR(uid: number, rr: number)
+-- The season board's copy of a player's RR (Ranked.seasonStore). Off the
+-- tick: a DataStore write yields. The season is read HERE, at the result, so
+-- a match that ends after midnight on the 1st counts toward the new month.
+local function postRR(uid: number, rr: number, season: number)
 	task.spawn(function()
 		local ok, err = pcall(function()
-			boardStore:SetAsync(tostring(uid), math.max(0, math.floor(rr)))
+			DataStoreService:GetOrderedDataStore(Ranked.seasonStore(season))
+				:SetAsync(tostring(uid), math.max(0, math.floor(rr)))
 		end)
 		if not ok then
 			warn("[Ranked] board write failed: " .. tostring(err))
@@ -290,7 +291,13 @@ local function settle(player: Player, won: boolean, why: string, unrated: boolea
 	-- THE VISIBLE RANK MOVES BY RR, pulled toward where the new MMR says
 	-- this player belongs (Ranked.applyRR).
 	local rrDelta = Ranked.applyRR(b, won, oldRating)
-	postRR(player.UserId, b.rr)
+	-- THE SEASON: one more rated game this month, and onto its board once
+	-- there are SEASON_MIN_GAMES of them.
+	Ranked.rollSeason(b)
+	b.sgames += 1
+	if b.sgames >= Ranked.SEASON_MIN_GAMES then
+		postRR(player.UserId, b.rr, b.season)
+	end
 
 	-- FIRST TIME AT A RANK PAYS ITS REWARD. One rank per match at most now
 	-- (RR carries over at 100), but the loop still pays every rank skipped.

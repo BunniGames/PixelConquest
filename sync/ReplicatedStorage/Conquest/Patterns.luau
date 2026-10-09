@@ -224,6 +224,49 @@ function Patterns.rainbow(r: number, g: number, b: number, x: number, y: number)
 		b + (RAINBOW_B[i] - b) * RAINBOW_MIX
 end
 
+-- ----------------------------------------------------------- painted art --
+-- THE SECOND HUE EXCEPTION (2026-10-08): the CROWNS season skin, owner: "a
+-- really exclusive skin ... looks really really cool". Gold crowns with
+-- jewels, stamped over the empire's fill with a drop shadow. Like the
+-- rainbow it is reached through its own door and `apply` is untouched, so
+-- every lightness pattern keeps its measured zero-mean guarantee; like the
+-- rainbow it lives in the renderer's INTERIOR branch, so the border is still
+-- the empire's own colour.
+--
+-- A def opts in with `art` (rows of characters, power-of-two sides like
+-- `cells`) and `ink` (character -> { r, g, b, mix }). Two characters are
+-- fixed: '.' leaves the fill alone and 's' is the shadow, the fill itself
+-- darkened to ART_SHADOW, so the crown sits ON the territory instead of
+-- being pasted over it in one flat colour.
+local ART_SHADOW = 0.55
+
+type Art = { r: buffer, g: buffer, b: buffer, m: buffer, w: number, wm: number, hm: number }
+
+-- Indexed by pattern index; nil for every def without `art`, which is what
+-- the renderer tests. Filled by the compile loop below.
+local arts: { [number]: Art } = {}
+Patterns.ART = arts
+
+-- The finished fill with the art laid over it. Mix is stored in 255ths; 255
+-- in the shadow channel `m` slot means "shadow" (see compileArt).
+function Patterns.paint(index: number, r: number, g: number, b: number, x: number, y: number): (number, number, number)
+	local a = arts[index]
+	if not a then
+		return r, g, b
+	end
+	local i = bit32.band(y, a.hm) * a.w + bit32.band(x, a.wm)
+	local m = buffer.readu8(a.m, i)
+	if m == 0 then
+		return r, g, b
+	elseif m == 255 and buffer.readu8(a.r, i) == 0 then
+		return r * ART_SHADOW, g * ART_SHADOW, b * ART_SHADOW
+	end
+	local t = m / 254
+	return r + (buffer.readu8(a.r, i) - r) * t,
+		g + (buffer.readu8(a.g, i) - g) * t,
+		b + (buffer.readu8(a.b, i) - b) * t
+end
+
 -- ---------------------------------------------------------------- tiers ----
 -- The rarity colours are the kit's own ladder, which this page already speaks:
 -- the lobby's JOIN pills are green / blue / magenta for common / rare / ultra.
@@ -285,6 +328,15 @@ Patterns.TIERS = {
 		color = Color3.fromRGB(240, 244, 252),
 		price = 0,
 		blurb = "Not for sale. Win for it.",
+	},
+	-- RANKED SEASON REWARDS (2026-10-08). Right of EARNED because it is the
+	-- one thing even wins cannot buy: a top-100 finish in a ranked season.
+	{
+		key = "season",
+		name = "SEASON",
+		color = Color3.fromRGB(196, 140, 255),
+		price = 0,
+		blurb = "Finish a ranked season in the top 100.",
 	},
 } :: { Tier }
 
@@ -360,6 +412,15 @@ export type Def = {
 	-- one and never call `apply` on it. See the rainbow section above for what
 	-- that exception costs and what it is not allowed to touch.
 	rainbow: boolean?,
+	-- A RANKED SEASON REWARD (2026-10-08), a FIFTH ownership axis: granted to
+	-- the top 100 of a finished season by RankedLobby and never sold. mayBuy
+	-- refuses it and `standing` is never affordable, for the reward-skin
+	-- reason (its tier price is 0).
+	season: boolean?,
+	-- PAINTED ART instead of a lightness grid; see Patterns.paint. `cells` is
+	-- still required (an empty list is fine) because compile reads it.
+	art: { string }?,
+	ink: { [string]: { number } }?,
 	cells: { string },
 }
 
@@ -806,6 +867,48 @@ Patterns.LIST = {
 			"+**++..--##--..+",
 		},
 	},
+
+	-- ---------------------------------------------------- season reward --
+	-- CROWNS (2026-10-08): the top 100 of every ranked season. Two gold
+	-- crowns to a 16-tile block on a half-step stagger, so they read as a
+	-- lattice rather than rows; ruby and sapphire set in each band, a pearl
+	-- on the middle point, a drop shadow down and right, and a four-point
+	-- glint in each gap. Not the earned CROWN above, which is a lightness
+	-- grid three wins buy; this one is painted in real gold.
+	{
+		key = "crowns",
+		name = "Crowns",
+		tier = "season",
+		season = true,
+		ink = {
+			H = { 255, 238, 150, 1 }, -- lit gold, the points
+			G = { 238, 180, 52, 1 }, -- gold
+			D = { 168, 104, 22, 1 }, -- the band's underside
+			R = { 230, 30, 70, 1 }, -- ruby
+			B = { 60, 140, 255, 1 }, -- sapphire
+			W = { 255, 255, 240, 1 }, -- pearl / glint centre
+			g = { 238, 180, 52, 0.45 }, -- glint arms, half laid
+		},
+		art = {
+			"s.........ssssss",
+			"................",
+			".H..W..H........",
+			".GsGGG.Gs...g...",
+			".GGGGGGGs..gWg..",
+			".GRGBGRGs...g...",
+			".GGGGGGGs.......",
+			".DDDDDDDs.......",
+			"..sssssss.......",
+			"................",
+			".........H..W..H",
+			"s...g....GsGGG.G",
+			"s..gWg...GGGGGGG",
+			"s...g....GRGBGRG",
+			"s........GGGGGGG",
+			"s........DDDDDDD",
+		},
+		cells = {},
+	},
 } :: { Def }
 
 Patterns.DEFAULT_KEY = "solid"
@@ -882,9 +985,44 @@ Patterns.RAINBOW_INDEX = 0
 -- Patterns.byKey answers nil for.
 Patterns.REWARD_KEY = ""
 
+local function compileArt(index: number, def: Def)
+	local rows = def.art :: { string }
+	local ink = def.ink or {}
+	local h = #rows
+	local w = #rows[1]
+	assert(bit32.band(w, w - 1) == 0 and bit32.band(h, h - 1) == 0, `art {def.key}: sides must be powers of two`)
+	local a: Art = {
+		r = buffer.create(w * h), g = buffer.create(w * h), b = buffer.create(w * h), m = buffer.create(w * h),
+		w = w, wm = w - 1, hm = h - 1,
+	}
+	for y = 1, h do
+		local row = rows[y]
+		assert(#row == w, `art {def.key}: row {y} is {#row} wide, expected {w}`)
+		for x = 1, w do
+			local ch = string.sub(row, x, x)
+			local o = (y - 1) * w + (x - 1)
+			if ch == "s" then
+				-- Shadow: m = 255 with r = 0 (no ink is pure black at full mix).
+				buffer.writeu8(a.m, o, 255)
+			elseif ch ~= "." then
+				local c = ink[ch]
+				assert(c ~= nil, `art {def.key}: no ink for '{ch}'`)
+				buffer.writeu8(a.r, o, math.max(1, c[1]))
+				buffer.writeu8(a.g, o, c[2])
+				buffer.writeu8(a.b, o, c[3])
+				buffer.writeu8(a.m, o, math.clamp(math.round(c[4] * 254), 1, 254))
+			end
+		end
+	end
+	arts[index] = a
+end
+
 for i, def in Patterns.LIST do
 	indexByKey[def.key] = i
 	compile(i, def)
+	if def.art then
+		compileArt(i, def)
+	end
 	if def.rainbow then
 		Patterns.RAINBOW_INDEX = i
 	end
@@ -932,6 +1070,12 @@ end
 -- Data.claimFreeReward and there is no other one.
 function Patterns.isReward(def: Def): boolean
 	return def.reward == true
+end
+
+-- Whether a pattern is a RANKED SEASON reward. The grant path is
+-- RankedLobby's season payout and there is no other one.
+function Patterns.isSeason(def: Def): boolean
+	return def.season == true
 end
 
 -- The MONEY price. Zero for a Robux skin, whatever its tier says: the tier
@@ -1052,6 +1196,8 @@ export type Standing = {
 	-- the price means nothing and `affordable` is always false -- and a card
 	-- of its own, so the shop has to be able to tell all three apart.
 	reward: boolean,
+	-- A ranked season reward; same consequence again, its own card.
+	season: boolean,
 }
 
 function Patterns.standing(def: Def, owned: { [string]: boolean }?, money: number, wins: number): Standing
@@ -1060,6 +1206,7 @@ function Patterns.standing(def: Def, owned: { [string]: boolean }?, money: numbe
 	local robux = Patterns.isRobux(def)
 	local vip = Patterns.isVip(def)
 	local reward = Patterns.isReward(def)
+	local season = Patterns.isSeason(def)
 	return {
 		owned = def.key == Patterns.DEFAULT_KEY or (owned ~= nil and owned[def.key] == true),
 		-- A VIP pattern is NEVER affordable, whatever the balance. Without that
@@ -1069,12 +1216,13 @@ function Patterns.standing(def: Def, owned: { [string]: boolean }?, money: numbe
 		-- version of the VIP reason above: its tier price is 0, so without
 		-- this term `money >= price` is true at a balance of nothing and the
 		-- shop draws a free skin with a +3% boost on it.
-		affordable = need == nil and not robux and not vip and not reward and money >= price,
+		affordable = need == nil and not robux and not vip and not reward and not season and money >= price,
 		winsShort = (need ~= nil and wins < need) and (need - wins) or nil,
 		price = price,
 		robux = robux,
 		vip = vip,
 		reward = reward,
+		season = season,
 	}
 end
 
@@ -1102,6 +1250,9 @@ function Patterns.mayBuy(def: Def, owned: { [string]: boolean }?, money: number,
 	-- through -- the Money check at the bottom reads `0 >= 0` and returns true.
 	if Patterns.isReward(def) then
 		return false, `{def.name} comes from Free Rewards.`
+	end
+	if Patterns.isSeason(def) then
+		return false, `{def.name} is a ranked season reward -- finish in the top 100.`
 	end
 	if Patterns.isVip(def) then
 		return false, `{def.name} comes with VIP.`
@@ -1175,6 +1326,8 @@ function Patterns.swatch(index: number): EditableImage
 			local r, g, b
 			if isRainbow then
 				r, g, b = Patterns.rainbow(br, bg, bb, x, y)
+			elseif arts[index] then
+				r, g, b = Patterns.paint(index, br, bg, bb, x, y)
 			else
 				r, g, b = Patterns.apply(br, bg, bb, Patterns.sample(index, x, y))
 			end

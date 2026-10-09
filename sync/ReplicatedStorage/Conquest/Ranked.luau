@@ -276,12 +276,55 @@ Ranked.MODE = "ranked"
 Ranked.MAX_PARTY = 4
 
 -- THE LEADERBOARD (owner, 2026-10-08: "a leaderboard ... that displays top X
--- players in terms of their RR"). One OrderedDataStore keyed by user id with
--- the RR total as its value: a rated match writes it (RankedMatch.settle), and
--- so does joining a server, so players who ranked before the board existed
--- are on it from their next visit. The lobby reads the top BOARD_SIZE.
-Ranked.BOARD_STORE = "ConquestRankedRR_v1"
+-- players in terms of their RR") IS THE SEASON BOARD. The lobby reads the top
+-- BOARD_SIZE of the CURRENT season's store.
 Ranked.BOARD_SIZE = 100
+
+-- ================================================================ seasons ==
+-- MONTHLY SEASONS (owner, 2026-10-08: "seasons run on a monthly basis. Top
+-- 100 people should get like 100K Money and a really exclusive skin").
+--
+-- A season is a calendar month in UTC; season 1 is October 2026. RR is NOT
+-- reset (owner, 2026-10-05: RR is a running total). What a season measures is
+-- who is ACTIVE at the top: a player joins a season's board only after
+-- SEASON_MIN_GAMES rated games in it, so a high RR banked in an old month and
+-- then left alone wins nothing. Each season has its own OrderedDataStore
+-- (seasonStore), written after every rated match once the player qualifies;
+-- when the month ends that store is frozen and its top SEASON_TOP are paid
+-- SEASON_MONEY and the SEASON_PATTERN skin the next time they join any server
+-- (RankedLobby.paySeasons).
+Ranked.SEASON_YEAR, Ranked.SEASON_MONTH = 2026, 10
+Ranked.SEASON_TOP = 100
+Ranked.SEASON_MONEY = 100000
+Ranked.SEASON_PATTERN = "crowns"
+Ranked.SEASON_MIN_GAMES = 5
+
+-- The season a unix time falls in (now when omitted). DateTime, never
+-- os.date/os.time with a table: those read the machine's LOCAL zone.
+function Ranked.season(t: number?): number
+	local u = DateTime.fromUnixTimestamp(t or os.time()):ToUniversalTime()
+	return (u.Year - Ranked.SEASON_YEAR) * 12 + (u.Month - Ranked.SEASON_MONTH) + 1
+end
+
+-- The unix time season `s` ends (= the next one starts).
+function Ranked.seasonEnds(s: number): number
+	local idx = Ranked.SEASON_YEAR * 12 + (Ranked.SEASON_MONTH - 1) + s
+	return DateTime.fromUniversalTime(idx // 12, idx % 12 + 1, 1).UnixTimestamp
+end
+
+function Ranked.seasonStore(s: number): string
+	return "ConquestRankedSeason_" .. s
+end
+
+-- Moves a block into the current season: a new month starts its season game
+-- count over. Called before any read or write of `sgames`.
+function Ranked.rollSeason(block: any)
+	local now = Ranked.season()
+	if block.season ~= now then
+		block.season = now
+		block.sgames = 0
+	end
+end
 
 -- ============================================================ rating maths ==
 
@@ -459,6 +502,7 @@ export type View = {
 	best: number,
 	games: number,
 	wins: number,
+	sgames: number,
 }
 
 -- THE PROFILE BLOCK. Kept here so the lobby and the match server build it
@@ -466,7 +510,14 @@ export type View = {
 function Ranked.defaultBlock(): any
 	-- No `rrv` here on purpose: ensure() fills defaults first, and a default
 	-- rrv would skip the old-bar conversion below. ensure() sets it.
-	return { rating = Ranked.START, rank = 1, rr = 0, shield = 0, best = 1, games = 0, wins = 0, losses = 0 }
+	-- season/sgames: the season the count belongs to and rated games in it.
+	-- spaid: season number (as a string key) -> finishing place, 0 = not in
+	-- the top; the payout latch. snotice (absent by default) is an unseen
+	-- payout the lobby shows once.
+	return {
+		rating = Ranked.START, rank = 1, rr = 0, shield = 0, best = 1, games = 0, wins = 0, losses = 0,
+		season = 0, sgames = 0, spaid = {},
+	}
 end
 
 -- Fills any missing field in place and returns the block. Additive only.
@@ -501,6 +552,7 @@ function Ranked.view(block: any): View
 		best = block.best,
 		games = block.games,
 		wins = block.wins,
+		sgames = if block.season == Ranked.season() then block.sgames else 0,
 	}
 end
 

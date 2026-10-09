@@ -280,6 +280,8 @@ local function push(player: Player)
 		queue = p.queue,
 		since = p.since,
 		invites = pending,
+		-- An unseen season payout, shown once (RankedUI) until "seasonSeen".
+		notice = b and b.snotice or nil,
 	})
 end
 
@@ -297,44 +299,70 @@ local function toast(player: Player, msg: string)
 end
 
 -- ============================================================ leaderboard ==
--- The top Ranked.BOARD_SIZE by RR, read from the board store at most once a
--- BOARD_REFRESH per server and handed to whoever opens the board. Names come
--- from UserService in one batch, cached for the server's life.
+-- The CURRENT season's top Ranked.BOARD_SIZE by RR, read from its store at
+-- most once a BOARD_REFRESH per server and handed to whoever opens the board.
+-- Names come from UserService in one batch, cached for the server's life.
 
 local BOARD_REFRESH = 60
-local boardStore = DataStoreService:GetOrderedDataStore(Ranked.BOARD_STORE)
-local board: { { id: number, name: string, rr: number } }? = nil
+type BoardRow = { id: number, name: string, rr: number }
+local board: { BoardRow }? = nil
+local boardSeason = 0
 local boardAt = -math.huge
 local boardBusy = false
 local boardWaiting: { Player } = {}
 local boardNames: { [number]: string } = {}
 
-local function postRR(uid: number, rr: number)
+local function seasonStore(s: number): OrderedDataStore
+	return DataStoreService:GetOrderedDataStore(Ranked.seasonStore(s))
+end
+
+local function postRR(uid: number, rr: number, s: number)
 	task.spawn(function()
 		pcall(function()
-			boardStore:SetAsync(tostring(uid), math.max(0, math.floor(rr)))
+			seasonStore(s):SetAsync(tostring(uid), math.max(0, math.floor(rr)))
 		end)
 	end)
 end
 
+-- The top `n` of season `s`, or nil when the read failed. minValue 1: a
+-- player with no RR is not on a board.
+local function readTop(s: number, n: number): { BoardRow }?
+	local ok, page = pcall(function()
+		return seasonStore(s):GetSortedAsync(false, n, 1):GetCurrentPage()
+	end)
+	if not (ok and type(page) == "table") then
+		warn("[Ranked] board read failed: " .. tostring(page))
+		return nil
+	end
+	local rows = {}
+	for _, item in page do
+		local id = tonumber(item.key)
+		if id then
+			table.insert(rows, { id = id, name = "?", rr = tonumber(item.value) or 0 })
+		end
+	end
+	return rows
+end
+
 local function sendBoard(player: Player)
 	if player.Parent then
-		RankedRE:FireClient(player, "board", board or {})
+		RankedRE:FireClient(player, "board", {
+			season = boardSeason,
+			ends = Ranked.seasonEnds(boardSeason),
+			rows = board or {},
+		})
 	end
 end
 
 local function refreshBoard()
 	boardBusy = true
-	local ok, page = pcall(function()
-		-- minValue 1: a player who has never gained RR is not on the board.
-		return boardStore:GetSortedAsync(false, Ranked.BOARD_SIZE, 1):GetCurrentPage()
-	end)
-	if ok and type(page) == "table" then
+	local s = Ranked.season()
+	local rows = readTop(s, Ranked.BOARD_SIZE)
+	if rows then
 		local missing = {}
-		for _, item in page do
-			local id = tonumber(item.key)
-			if id and not boardNames[id] then
-				table.insert(missing, id)
+		for _, r in rows do
+			if not boardNames[r.id] then
+				table.insert(missing, r.id)
 			end
 		end
 		if #missing > 0 then
@@ -347,17 +375,10 @@ local function refreshBoard()
 				end
 			end
 		end
-		local rows = {}
-		for _, item in page do
-			local id = tonumber(item.key)
-			if id then
-				table.insert(rows, { id = id, name = boardNames[id] or "?", rr = tonumber(item.value) or 0 })
-			end
+		for _, r in rows do
+			r.name = boardNames[r.id] or "?"
 		end
-		board = rows
-		boardAt = os.clock()
-	else
-		warn("[Ranked] board read failed: " .. tostring(page))
+		board, boardSeason, boardAt = rows, s, os.clock()
 	end
 	boardBusy = false
 	local waiting = boardWaiting
@@ -368,7 +389,7 @@ local function refreshBoard()
 end
 
 local function requestBoard(player: Player)
-	if os.clock() - boardAt < BOARD_REFRESH and board then
+	if board and boardSeason == Ranked.season() and os.clock() - boardAt < BOARD_REFRESH then
 		sendBoard(player)
 		return
 	end
@@ -377,6 +398,121 @@ local function requestBoard(player: Player)
 		task.spawn(refreshBoard)
 	end
 end
+
+-- ================================================================ payout ==
+-- A FINISHED SEASON PAYS ITS TOP Ranked.SEASON_TOP the next time each of them
+-- is in any server: SEASON_MONEY plus the SEASON_PATTERN skin. Checked on
+-- join and every PAY_EVERY s for everyone here (so a player online at the
+-- turn of the month is paid without rejoining), for the last SEASON_LOOKBACK
+-- seasons (a month away still collects). A season is read only SETTLE_AFTER
+-- its end, so a match that was finishing at midnight has landed, and each
+-- final board is read once per server and kept.
+--
+-- THE LATCH IS profile.ranked.spaid[season], written BEFORE paying and
+-- flushed; a failed flush takes the whole grant back out, the way
+-- Data.claimFreeReward's callers do -- a grant that is not durable did not
+-- happen, and a latch without it would refuse to pay it again.
+
+local SEASON_LOOKBACK = 3
+local SETTLE_AFTER = 600
+local PAY_EVERY = 300
+local finals: { [number]: { [number]: number } } = {}
+local finalsBusy: { [number]: boolean } = {}
+
+local function finalBoard(s: number): { [number]: number }?
+	while finalsBusy[s] do
+		task.wait(0.5)
+	end
+	if finals[s] then
+		return finals[s]
+	end
+	finalsBusy[s] = true
+	local rows = readTop(s, Ranked.SEASON_TOP)
+	if rows then
+		local pos = {}
+		for i, r in rows do
+			pos[r.id] = i
+		end
+		finals[s] = pos
+	end
+	finalsBusy[s] = nil
+	return finals[s]
+end
+
+local function refreshPatterns(player: Player)
+	local be = game:GetService("ServerStorage"):FindFirstChild("ConquestPatternsRefresh")
+	if be and be:IsA("BindableEvent") then
+		be:Fire(player)
+	end
+end
+
+local paying: { [number]: boolean } = {}
+local function paySeasons(player: Player)
+	local uid = player.UserId
+	if paying[uid] then
+		return
+	end
+	paying[uid] = true
+	local profile = Data.get(player)
+	local b = profile and Ranked.ensure(profile)
+	local cur = Ranked.season()
+	local paid = false
+	-- Never played ranked: there is no board this account can be on.
+	if b and b.games > 0 then
+		for s = math.max(1, cur - SEASON_LOOKBACK), cur - 1 do
+			local key = tostring(s)
+			if b.spaid[key] == nil and os.time() >= Ranked.seasonEnds(s) + SETTLE_AFTER then
+				local fin = finalBoard(s)
+				-- The read yielded: the player may have left, or the profile
+				-- been replaced, in the meantime.
+				if not fin or not player.Parent or Data.get(player) ~= profile then
+					break
+				end
+				local pos = fin[uid]
+				b.spaid[key] = pos or 0
+				if not pos then
+					Data.markDirty(player)
+				else
+					if type(profile.patterns) ~= "table" then
+						profile.patterns = {}
+					end
+					local had = profile.patterns[Ranked.SEASON_PATTERN] == true
+					profile.patterns[Ranked.SEASON_PATTERN] = true
+					Data.addMoney(player, Ranked.SEASON_MONEY)
+					local prevNotice = b.snotice
+					b.snotice = { season = s, pos = pos, money = Ranked.SEASON_MONEY, skin = not had }
+					if Data.flush(player) then
+						paid = true
+						print(("[Ranked] season %d: %s finished #%d -- paid"):format(s, player.Name, pos))
+					else
+						b.spaid[key] = nil
+						b.snotice = prevNotice
+						profile.money = math.max(0, (tonumber(profile.money) or 0) - Ranked.SEASON_MONEY)
+						if not had then
+							profile.patterns[Ranked.SEASON_PATTERN] = nil
+						end
+						warn("[Ranked] season payout not saved for " .. player.Name .. " -- retrying later")
+						break
+					end
+				end
+			end
+		end
+	end
+	paying[uid] = nil
+	if paid then
+		refreshPatterns(player)
+		push(player)
+	end
+end
+
+task.spawn(function()
+	while true do
+		task.wait(PAY_EVERY)
+		for _, plr in Players:GetPlayers() do
+			task.spawn(paySeasons, plr)
+		end
+	end
+end)
 
 -- ================================================================== queue ==
 
@@ -994,6 +1130,14 @@ RankedRE.OnServerEvent:Connect(function(player: Player, action: any, arg: any)
 	elseif action == "board" then
 		requestBoard(player)
 
+	elseif action == "seasonSeen" then
+		-- The payout card was shown and closed: it never shows again.
+		local b = blockOf(player)
+		if b and b.snotice then
+			b.snotice = nil
+			Data.markDirty(player)
+		end
+
 	elseif action == "queue" then
 		local q = Ranked.queue(arg)
 		if not q then
@@ -1197,11 +1341,16 @@ end
 
 Data.onReady(function(player: Player)
 	publish(player)
-	-- Onto the board with whatever RR they already hold.
+	-- Back onto this season's board (a write that failed after the last
+	-- match, or an owner edit, heals here), then any finished season's pay.
 	local b = blockOf(player)
-	if b and b.games > 0 then
-		postRR(player.UserId, b.rr)
+	if b then
+		Ranked.rollSeason(b)
+		if b.sgames >= Ranked.SEASON_MIN_GAMES then
+			postRR(player.UserId, b.rr, b.season)
+		end
 	end
+	task.spawn(paySeasons, player)
 	push(player)
 	joinOnArrival(player)
 end)
@@ -1248,4 +1397,17 @@ Players.PlayerRemoving:Connect(function(player)
 	remoteSent[player.UserId] = nil
 	sentInvites[player.UserId] = nil
 	lastIntent[player.UserId] = nil
+	paying[player.UserId] = nil
 end)
+
+-- STUDIO ONLY: run the payout for a player on demand, for the season test
+-- (fire ServerStorage.RankedSeasonCheck with the Player).
+if IS_STUDIO then
+	local ServerStorage = game:GetService("ServerStorage")
+	local be = ServerStorage:FindFirstChild("RankedSeasonCheck") :: BindableEvent? or Instance.new("BindableEvent")
+	;(be :: BindableEvent).Name = "RankedSeasonCheck"
+	;(be :: BindableEvent).Parent = ServerStorage
+	;(be :: BindableEvent).Event:Connect(function(player: Player)
+		task.spawn(paySeasons, player)
+	end)
+end
