@@ -304,6 +304,10 @@ Ranked.SEASON_MIN_GAMES = 5
 -- SEASON_TOP, rounded to SEASON_MONEY_ROUND (about 900 a place).
 Ranked.SEASON_SKIN_TOP = 10
 Ranked.SEASON_MONEY = 100000
+-- THE PODIUM (owner, 2026-10-08: "1 Million for #1. 500k for number 2.
+-- 250k then 200k then 150k then 100k"). Places past this list and up to
+-- SEASON_SKIN_TOP get SEASON_MONEY.
+Ranked.SEASON_MONEY_TOP = { 1000000, 500000, 250000, 200000, 150000 }
 Ranked.SEASON_MONEY_HI = 90000
 Ranked.SEASON_MONEY_LO = 10000
 Ranked.SEASON_MONEY_ROUND = 500
@@ -314,7 +318,7 @@ function Ranked.seasonPrize(pos: number): (number, boolean)
 		return 0, false
 	end
 	if pos <= Ranked.SEASON_SKIN_TOP then
-		return Ranked.SEASON_MONEY, true
+		return Ranked.SEASON_MONEY_TOP[pos] or Ranked.SEASON_MONEY, true
 	end
 	local first, last = Ranked.SEASON_SKIN_TOP + 1, Ranked.SEASON_TOP
 	local t = if last > first then (pos - first) / (last - first) else 0
