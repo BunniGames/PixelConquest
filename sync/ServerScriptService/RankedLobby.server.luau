@@ -344,12 +344,34 @@ local function readTop(s: number, n: number): { BoardRow }?
 	return rows
 end
 
+-- STUDIO ONLY: a board this short is padded to STUDIO_FILL rows of copies of
+-- the viewer (owner, 2026-10-08: "put 10 of me so i can see roughly what it
+-- looks like"). Only the PAYLOAD is padded -- `board` itself, the store and
+-- the overlords are untouched -- and a live server never reaches it.
+local STUDIO_FILL = 10
+local function studioRows(player: Player, rows: { BoardRow }): { BoardRow }
+	if not IS_STUDIO or #rows >= STUDIO_FILL then
+		return rows
+	end
+	local out = table.clone(rows)
+	local b = blockOf(player)
+	local base = b and b.rr or 0
+	for i = 1, STUDIO_FILL - #rows do
+		-- Negative ids, so only a real row of yours lights up as "you".
+		table.insert(out, { id = -i, name = player.DisplayName, rr = base + (STUDIO_FILL - i) * 40 })
+	end
+	table.sort(out, function(x, y)
+		return x.rr > y.rr
+	end)
+	return out
+end
+
 local function sendBoard(player: Player)
 	if player.Parent then
 		RankedRE:FireClient(player, "board", {
 			season = boardSeason,
 			ends = Ranked.seasonEnds(boardSeason),
-			rows = board or {},
+			rows = studioRows(player, board or {}),
 		})
 	end
 end
