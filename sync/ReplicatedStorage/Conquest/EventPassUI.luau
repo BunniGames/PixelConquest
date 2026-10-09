@@ -293,7 +293,7 @@ local function iconInto(box: GuiObject, g: EventPass.Grant)
 		img.Size = UDim2.fromScale(0.86, 0.86)
 		img.Parent = box
 		Icons.resample(img)
-		local tag = label(box, "Tag", 100, 100, 0, 66, 100, 34, Color3.fromRGB(111, 217, 138), Enum.TextXAlignment.Center, kit.FONT_KIT)
+		local tag = label(box, "Tag", 100, 100, 50, 74, 50, 24, Color3.fromRGB(111, 217, 138), Enum.TextXAlignment.Right, kit.FONT_KIT)
 		setText(tag, "15:00")
 		tag.ZIndex = 3
 		local s = Instance.new("UIStroke")
@@ -332,7 +332,10 @@ end
 -- transparent button over it for the press.
 local function buildSlot(self: any, card: Instance, tier: number, premium: boolean, y: number, h: number): any
 	local grants = if premium then EventPass.TIERS[tier].premium else EventPass.TIERS[tier].free
-	local class = if premium then CLASS[EventPass.classOf(tier)] else CLASS.filler
+	-- A FREE TIER WITH AN EXTRA (every fifth) leads with the extra -- its icon,
+	-- its words first -- and wears the mid blue, so it reads as more than Money.
+	local extra = not premium and #grants > 1
+	local class = if premium then CLASS[EventPass.classOf(tier)] elseif extra then CLASS.mid else CLASS.filler
 
 	local group = Instance.new("CanvasGroup")
 	group.Name = if premium then "Premium" else "Free"
@@ -360,7 +363,7 @@ local function buildSlot(self: any, card: Instance, tier: number, premium: boole
 	square.AspectRatio = 1
 	square.DominantAxis = Enum.DominantAxis.Height
 	square.Parent = box
-	iconInto(box, grants[1])
+	iconInto(box, if extra then grants[2] else grants[1])
 
 	local nameY, nameH = if premium then 112 else 68, if premium then 50 else 24
 	local name = label(group, "Name", SLOT_W, h, 4, nameY, SLOT_W - 8, nameH, kit.INK, Enum.TextXAlignment.Center, kit.FONT_BOLD)
@@ -369,7 +372,7 @@ local function buildSlot(self: any, card: Instance, tier: number, premium: boole
 	if cap then
 		cap.MaxTextSize = if premium then 15 else 13
 	end
-	setText(name, rewardWords(grants))
+	setText(name, if extra then grantWords(grants[2]) .. "\n+ " .. grantWords(grants[1]) else rewardWords(grants))
 
 	-- The state line: CLAIM when it can be taken, a tick once it has been.
 	local stateY = if premium then 170 else 68

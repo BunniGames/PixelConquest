@@ -1157,6 +1157,9 @@ function Data.claimEventTier(player: Player, tier: any, premium: boolean): (bool
 			if p.patterns[g.key] ~= true then
 				table.insert(wrote, { p.patterns, g.key, p.patterns[g.key] })
 				p.patterns[g.key] = true
+			else
+				-- Already owned (the free and premium tracks share Pumpkins).
+				add("money", EventPass.DUP_PATTERN_MONEY)
 			end
 		elseif g.kind == "coupon" and g.key ~= nil then
 			table.insert(wrote, { p.boostCoupons, g.key, p.boostCoupons[g.key] })

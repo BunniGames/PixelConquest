@@ -30,8 +30,14 @@
 -- A COUPON is a timed boost (Config.TIMED_BOOSTS: Gold Boost 2x gold, Special
 -- Forces +50% speed vs AI) that has not started: it waits on the profile until
 -- the player spends it on the in-match store's boost card, so its 15 minutes
--- run in a round of their choosing (Data.useCoupon). The free track gets one
--- on each of 10 / 20 / 30 as well.
+-- run in a round of their choosing (Data.useCoupon).
+--
+-- THE FREE TRACK'S EXTRAS (owner, 2026-10-09: "add some of the rewards to the
+-- regular track too"): every fifth tier carries one of the premium kinds on
+-- top of its Money -- 5 a revive, 10 a Gold Boost coupon, 15 a 3x money
+-- round, 20 a Special Forces coupon, 25 the Pumpkins skin, 30 two Gold Boost
+-- coupons. A skin already owned (premium 5 gives Pumpkins too) pays 5,000
+-- Money instead (ConquestData.claimEventTier).
 --
 -- TIER SKIPS: +1 / +3 / +5 TIER developer products move the account that many
 -- tiers along (EventPass.skip), keeping how far into the current tier it was.
@@ -119,10 +125,13 @@ local SPECIAL: { [number]: { Grant } } = {
 	[30] = { { kind = "pass", key = "ARTILLERY" } },
 }
 
--- THE FREE TRACK'S COUPONS, on top of its Money: a taste of each boost.
+-- THE FREE TRACK'S EXTRAS, on top of its Money, every fifth tier.
 local FREE_EXTRA: { [number]: Grant } = {
+	[5] = { kind = "revive", amount = 1 },
 	[10] = { kind = "coupon", key = "BOOST_GOLD", amount = 1 },
+	[15] = { kind = "money3x", amount = 1 },
 	[20] = { kind = "coupon", key = "TUTORIAL_FORCES", amount = 1 },
+	[25] = { kind = "pattern", key = "pumpkins" },
 	[30] = { kind = "coupon", key = "BOOST_GOLD", amount = 2 },
 }
 
@@ -136,6 +145,9 @@ for i = 1, EventPass.COUNT do
 		premium = SPECIAL[i] or { { kind = "money", amount = band(i) } },
 	}
 end
+
+-- WHAT A SKIN ALREADY OWNED PAYS INSTEAD, so a reward is never empty.
+EventPass.DUP_PATTERN_MONEY = 5000
 
 -- THE PRODUCTS (Products: EVENT_PASS, EVENT_SKIP1/3/5). Keys only; the ids
 -- and prices live in Products like every other product.
