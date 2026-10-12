@@ -1424,6 +1424,7 @@ local function buildCard(root: Frame, index: number, x: number, y: number, w: nu
 		modeChipText = modeChipText,
 		modeSub = modeSub,
 		mapAt = mapName.Position,
+		modeAt = modeName.Position,
 		chipAt = modeChip.Position,
 		subLift = UDim2.fromScale(0, SUB_LIFT / h),
 		clock = clock,
@@ -3844,6 +3845,7 @@ function LobbyUI.setBoard(self: LobbyUI, cards: { Matchmaker.CardView })
 			local lift = if sub then entry.subLift else UDim2.new()
 			entry.mapName.Position = entry.mapAt - lift
 			entry.modeChip.Position = entry.chipAt - lift
+			entry.modeName.Position = entry.modeAt - lift
 			paintFaces(entry, view.users, self.myUserId)
 
 			entry.state = view.state
