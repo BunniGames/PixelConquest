@@ -97,15 +97,12 @@ end
 export type Grant = { kind: string, amount: number?, key: string? }
 export type Tier = { cost: number, free: { Grant }, premium: { Grant } }
 
--- What each tier COSTS in XP, by decade: 80 / 120 / 160, 3,600 in all -- about
--- 16 hours of play at the rates above.
+-- What each tier COSTS in XP, by decade: 80 / 120 / 160, and EVERY FIFTH TIER
+-- DOUBLE (owner, 2026-10-09) -- 4,320 in all, about 19.5 hours of play at the
+-- rates above.
 local function cost(tier: number): number
-	if tier <= 10 then
-		return 80
-	elseif tier <= 20 then
-		return 120
-	end
-	return 160
+	local base = if tier <= 10 then 80 elseif tier <= 20 then 120 else 160
+	return if tier % 5 == 0 then base * 2 else base
 end
 
 -- THE FREE TRACK'S MONEY, rising by half-decade: 500 / 750 / 1,000 / 1,250 /
