@@ -82,6 +82,37 @@ Ranked.LADDER = {
 
 Ranked.OWNED_REFUND = 0.5
 
+-- OVERLORD (owner, 2026-10-08: "one more rank, Overlord, that only the top 25
+-- players can get. Top 25 by RR"). NOT A RUNG: every rung above is an RR
+-- total, and "top 25" is relative -- it moves when somebody else plays. So it
+-- is a TITLE drawn over the real rank: whoever sits in the top OVERLORD_TOP of
+-- the CURRENT season's board (the leaderboard, SEASON_MIN_GAMES to get on)
+-- shows as Overlord, and their stored rank, RR and rank rewards are
+-- untouched. Nothing is saved; it pays nothing (a title you can lose).
+--
+-- OVERLORD_INDEX is #LADDER + 1 -- its slot in RankEmblems.ORDER -- and is a
+-- DISPLAY index only: Ranked.rung answers it, but it is never stored, never a
+-- `block.rank`, and never handed to span / progress / rankOfRR.
+--
+-- COST: the lobby takes the set off the board read it already makes (one
+-- GetSortedAsync of the top BOARD_SIZE, at most once a minute per server)
+-- and hands it to ranked matches inside the match record, so a match server
+-- makes no read at all.
+Ranked.OVERLORD_TOP = 25
+Ranked.OVERLORD_INDEX = #Ranked.LADDER + 1
+Ranked.OVERLORD = {
+	id = "overlord", name = "Overlord", min = math.huge, rr = math.huge, money = 0,
+	color = Color3.fromRGB(255, 176, 64),
+} :: Rung
+-- boolean on a lobby player, true while they are in the top OVERLORD_TOP.
+Ranked.OVERLORD_ATTR = "ConquestOverlord"
+
+-- The emblem / name index to DRAW for a rank: the Overlord title over it when
+-- the player holds one.
+function Ranked.shown(rank: number, overlord: boolean?): number
+	return if overlord then Ranked.OVERLORD_INDEX else rank
+end
+
 -- Player attributes, written by whichever server holds the profile.
 Ranked.RANK_ATTR = "ConquestRank" -- number, 1..#LADDER
 Ranked.RANK_ID_ATTR = "ConquestRankId" -- string, LADDER[i].id
@@ -103,6 +134,9 @@ function Ranked.rankOf(rating: number): number
 end
 
 function Ranked.rung(index: number): Rung
+	if index == Ranked.OVERLORD_INDEX then
+		return Ranked.OVERLORD
+	end
 	return Ranked.LADDER[math.clamp(math.floor(index), 1, #Ranked.LADDER)]
 end
 

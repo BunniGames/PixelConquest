@@ -210,6 +210,12 @@ local remoteSent: { [number]: { number } } = {} -- inviter -> recent send times
 -- invitee -> the cross-server invite THIS server sent them (joinOnArrival).
 local sentInvites: { [number]: { from: number, t: number } } = {}
 
+-- THE OVERLORDS: user id -> true for the CURRENT season's top
+-- Ranked.OVERLORD_TOP, taken off the leaderboard read (refreshBoard). Any
+-- user id, not only this server's players: it is the one global list, which
+-- is what lets a match record carry a remote party's titles too.
+local overlords: { [number]: boolean } = {}
+
 local function blockOf(player: Player): any?
 	local profile = Data.get(player)
 	return profile and Ranked.ensure(profile) or nil
@@ -223,6 +229,7 @@ local function publish(player: Player)
 		player:SetAttribute(Ranked.RATING_ATTR, math.floor(b.rating))
 		player:SetAttribute(Ranked.RR_ATTR, b.rr)
 	end
+	player:SetAttribute(Ranked.OVERLORD_ATTR, overlords[player.UserId] == true)
 end
 
 local function partyFor(uid: number): Party
@@ -254,6 +261,7 @@ local function memberView(uid: number)
 		id = uid,
 		name = plr and plr.DisplayName or "?",
 		rank = b and b.rank or 1,
+		overlord = overlords[uid] == true,
 		rating = b and math.floor(b.rating) or Ranked.START,
 		rr = b and b.rr or 0,
 	}
@@ -275,6 +283,7 @@ local function push(player: Player)
 	end
 	RankedRE:FireClient(player, "state", {
 		me = b and Ranked.view(b) or nil,
+		overlord = overlords[player.UserId] == true,
 		leader = p.leader,
 		members = members,
 		queue = p.queue,
@@ -401,6 +410,32 @@ local function refreshBoard()
 			r.name = boardNames[r.id] or "?"
 		end
 		board, boardSeason, boardAt = rows, s, os.clock()
+
+		-- THE OVERLORDS ARE THE FIRST OVERLORD_TOP ROWS of the same read: no
+		-- second query. Only players here whose title CHANGED are re-sent.
+		local fresh: { [number]: boolean } = {}
+		for i = 1, math.min(#rows, Ranked.OVERLORD_TOP) do
+			fresh[rows[i].id] = true
+		end
+		local old = overlords
+		overlords = fresh
+		local touched: { [Party]: boolean } = {}
+		for _, plr in Players:GetPlayers() do
+			if (old[plr.UserId] == true) ~= (fresh[plr.UserId] == true) then
+				plr:SetAttribute(Ranked.OVERLORD_ATTR, fresh[plr.UserId] == true)
+				-- The whole party: their member rows draw the emblem too.
+				local leader = partyOf[plr.UserId]
+				local p = leader and parties[leader]
+				if p then
+					touched[p] = true
+				else
+					push(plr)
+				end
+			end
+		end
+		for p in touched do
+			pushParty(p)
+		end
 	end
 	boardBusy = false
 	local waiting = boardWaiting
@@ -409,6 +444,28 @@ local function refreshBoard()
 		sendBoard(plr)
 	end
 end
+
+-- The overlords must be current for people who never open the board, so the
+-- board is also refreshed on its own clock -- only while somebody is here,
+-- and only when the cache has gone stale, so an open board and this loop
+-- never both read. Started at a random phase so lobby servers do not all
+-- read in the same second. At most one sorted read a minute per server,
+-- against a budget of 5 + 2 x players.
+task.spawn(function()
+	task.wait(math.random() * BOARD_REFRESH)
+	while true do
+		-- Studio flips this server to a match in-session; a match never reads.
+		if ReplicatedStorage:GetAttribute(Matchmaker.ROLE_ATTR) ~= "lobby" then
+			return
+		end
+		if #Players:GetPlayers() > 0 and not boardBusy
+			and (boardSeason ~= Ranked.season() or os.clock() - boardAt >= BOARD_REFRESH)
+		then
+			refreshBoard()
+		end
+		task.wait(BOARD_REFRESH / 4)
+	end
+end)
 
 local function requestBoard(player: Player)
 	if board and boardSeason == Ranked.season() and os.clock() - boardAt < BOARD_REFRESH then
@@ -704,7 +761,7 @@ end
 
 -- STUDIO: start the round right here, the way MatchmakerServer.startLocally
 -- does for a board card.
-local function startLocally(q: Ranked.Queue, map: string, sides: { [string]: number }, rs: { [string]: number }, ghosts: number, size: number)
+local function startLocally(q: Ranked.Queue, map: string, sides: { [string]: number }, rs: { [string]: number }, ghosts: number, size: number, ol: { [string]: boolean })
 	ReplicatedStorage:SetAttribute(Matchmaker.LOCAL_MAP_ATTR, map)
 	ReplicatedStorage:SetAttribute(Matchmaker.LOCAL_MODE_ATTR, Ranked.MODE)
 	ReplicatedStorage:SetAttribute(Matchmaker.LOCAL_TEAMS_ATTR, 2)
@@ -715,6 +772,7 @@ local function startLocally(q: Ranked.Queue, map: string, sides: { [string]: num
 		size = size,
 		side = sides,
 		r = rs,
+		o = ol,
 		ghosts = ghosts > 0,
 	}))
 	print(("[Ranked] STUDIO: %s on %s starts in this session (%d ghost seats)"):format(q.id, map, ghosts))
@@ -939,6 +997,14 @@ local function tryMatch(p: Party, cache: RangeCache): boolean
 			rs[uidStr] = math.floor(b.rating)
 		end
 	end
+	-- Who in this match holds the Overlord title, so the match server draws
+	-- it without a board read of its own. Fixed for the round.
+	local ol: { [string]: boolean } = {}
+	for uidStr in sides do
+		if overlords[tonumber(uidStr) :: number] then
+			ol[uidStr] = true
+		end
+	end
 	local maps = Ranked.mapsFor(size)
 	local map = maps[math.random(1, #maps)]
 
@@ -958,7 +1024,7 @@ local function tryMatch(p: Party, cache: RangeCache): boolean
 					RankedRE:FireClient(plr, "found", { map = map, queue = q.id, size = size })
 				end
 			end
-			startLocally(q, map, sides, rs, ghosts, size)
+			startLocally(q, map, sides, rs, ghosts, size, ol)
 			return true
 		end
 		warn("[Ranked] ReserveServer failed: " .. tostring(code))
@@ -977,7 +1043,7 @@ local function tryMatch(p: Party, cache: RangeCache): boolean
 			expected = count,
 			phantoms = 0,
 			grace = ARRIVAL_GRACE,
-			ranked = { q = ("%dv%d"):format(size, size), size = size, side = sides, r = rs },
+			ranked = { q = ("%dv%d"):format(size, size), size = size, side = sides, r = rs, o = ol },
 		}, Matchmaker.MATCH_RECORD_TTL)
 	end)
 	if not wrote then

@@ -218,7 +218,11 @@ function RankedUI.new(screen: ScreenGui, onLeaveBoard: (() -> ())?)
 		self.queueButtons[q.id] = b
 	end
 
-	self.findButton = pillButton(panel, "Find", PW, PH, RX, 138, RW, 66, "FIND MATCH", VIOLET, VIOLET_LINE)
+	-- UNDER THE PARTY (owner, 2026-10-08): the column reads top to bottom as
+	-- the order you do things -- pick a size, gather a party, go -- so the
+	-- press that starts it is the last thing in it, not a button you pass on
+	-- the way to inviting a friend. The party box sits in the 138 slot.
+	self.findButton = pillButton(panel, "Find", PW, PH, RX, 322, RW, 66, "FIND MATCH", VIOLET, VIOLET_LINE)
 	self.findButton.Activated:Connect(function()
 		local st = self.state
 		if st and st.queue then
@@ -241,7 +245,7 @@ function RankedUI.new(screen: ScreenGui, onLeaveBoard: (() -> ())?)
 	-- the rest, tagged with this party (LaunchData) so they are invited to it
 	-- the moment they arrive.
 	local PBH = 172
-	local party = slab(panel, "Party", PW, PH, RX, 216, RW, PBH)
+	local party = slab(panel, "Party", PW, PH, RX, 138, RW, PBH)
 	self.partyTitle = label(party, "Title", RW, PBH, 14, 8, RW - 28, 18, GOLD, Enum.TextXAlignment.Left, kit.FONT_BOLD)
 	self.partyRows = {}
 	local GW = (RW - 28 - 14) / 2
@@ -444,9 +448,13 @@ function RankedUI.new(screen: ScreenGui, onLeaveBoard: (() -> ())?)
 	local LY, LH = 400, PH - 400 - 18
 	local ladder = slab(panel, "Ladder", PW, PH, 24, LY, PW - 48, LH)
 	local LW = PW - 48
-	local cw = LW / #Ranked.LADDER
+	-- The OVERLORD title takes a tenth cell past Emperor (owner, 2026-10-08):
+	-- its index in this strip is Ranked.OVERLORD_INDEX, its emblem's too.
+	local rungs = table.clone(Ranked.LADDER)
+	table.insert(rungs, Ranked.OVERLORD)
+	local cw = LW / #rungs
 	self.ladderCells = {}
-	for i, rung in Ranked.LADDER do
+	for i, rung in rungs do
 		local cell = Instance.new("Frame")
 		cell.Name = "Rung" .. i
 		cell.BackgroundColor3 = VIOLET
@@ -470,7 +478,8 @@ function RankedUI.new(screen: ScreenGui, onLeaveBoard: (() -> ())?)
 		-- number of RR needed for each rank"). RR is a running total, so this is
 		-- the number on your own card when you reach it.
 		local need = label(cell, "Need", CWi, CHi, 0, 77, CWi, 13, INK_DIM, Enum.TextXAlignment.Center, kit.FONT_BOLD)
-		need.Text = tostring(rung.rr) .. " RR"
+		need.Text = if rung == Ranked.OVERLORD then ("TOP " .. Ranked.OVERLORD_TOP)
+			else (tostring(rung.rr) .. " RR")
 		local rw = label(cell, "Money", CWi, CHi, 0, 93, CWi, 13, kit.GAIN, Enum.TextXAlignment.Center, kit.FONT_BOLD)
 		rw.Text = rung.money > 0 and ("$" .. short(rung.money)) or ""
 		local def = rung.pattern and Patterns.byKey(rung.pattern)
@@ -650,9 +659,12 @@ function RankedUI.paint(self: any)
 	local rank = view and view.rank or 1
 	local rr = view and view.rr or 0
 	local rung = Ranked.rung(rank)
+	-- The Overlord title is drawn over the real rank; the RR bar under it
+	-- stays the real rank's.
+	local shown = Ranked.shown(rank, st and st.overlord)
 
-	setEmblem(self.bigEmblem, rank)
-	kit.kitSet(self.rankName, string.upper(rung.name))
+	setEmblem(self.bigEmblem, shown)
+	kit.kitSet(self.rankName, string.upper(Ranked.rung(shown).name))
 	setText(self.rating, tostring(rr) .. " RR")
 	self.barFill.Size = UDim2.fromScale(Ranked.progress({ rank = rank, rr = rr }), 1)
 	self.barFill.BackgroundColor3 = rung.color
@@ -664,9 +676,9 @@ function RankedUI.paint(self: any)
 
 	-- The ladder strip: where you are.
 	for i, cell in self.ladderCells do
-		cell.BackgroundTransparency = (i == rank) and 0.35 or 1
+		cell.BackgroundTransparency = (i == shown) and 0.35 or 1
 		local ring = cell:FindFirstChild("Ring") :: UIStroke
-		ring.Enabled = i == rank
+		ring.Enabled = i == shown
 	end
 
 	-- Queue pills: the pick is gold; a size your party does not fit is dim.
@@ -709,7 +721,7 @@ function RankedUI.paint(self: any)
 		if m then
 			row.row.Visible = true
 			row.id = m.id
-			setEmblem(row.emblem, m.rank or 1)
+			setEmblem(row.emblem, Ranked.shown(m.rank or 1, m.overlord))
 			-- The leader's name is gold; that is the whole of "leader".
 			setText(row.name, tostring(m.name))
 			row.name.TextColor3 = (m.id == (st and st.leader)) and GOLD or INK
@@ -862,7 +874,7 @@ function RankedUI.paintFriends(self: any)
 			row.id = f.id
 			local plr = Players:GetPlayerByUserId(f.id)
 			local rank = plr and tonumber(plr:GetAttribute(Ranked.RANK_ATTR)) or 1
-			setEmblem(row.emblem, rank)
+			setEmblem(row.emblem, Ranked.shown(rank, plr and plr:GetAttribute(Ranked.OVERLORD_ATTR) == true))
 			-- A rank is only known for someone in this server (their attribute);
 			-- anyone else shows no badge rather than a guessed Recruit.
 			if row.emblem then
@@ -930,7 +942,9 @@ function RankedUI.paintBoard(self: any)
 		local e = list and list[n]
 		if e then
 			row.row.Visible = true
-			local rank = Ranked.rankOfRR(e.rr)
+			-- The board IS the season ranking, so its first OVERLORD_TOP rows are
+			-- the overlords -- the same rows the lobby took the title from.
+			local rank = Ranked.shown(Ranked.rankOfRR(e.rr), n <= Ranked.OVERLORD_TOP)
 			setEmblem(row.emblem, rank)
 			setText(row.pos, "#" .. n)
 			row.pos.TextColor3 = n <= 3 and GOLD or INK_DIM
