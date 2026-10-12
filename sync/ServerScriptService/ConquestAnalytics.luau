@@ -245,6 +245,9 @@ local ARM_PLAY_ENTERED = 1
 -- Per user, per step. Roblox already counts a repeated step once; this is to
 -- keep the local ring buffer readable when somebody replays the tutorial.
 local onboarded: { [number]: { [number]: boolean } } = {}
+-- The highest step of each LIFETIME LADDER logged for a user on this server
+-- (Analytics.progress), keyed by funnel name.
+local ladderTop: { [number]: { [string]: number } } = {}
 
 function Analytics.funnel(
 	player: Player?,
@@ -539,6 +542,7 @@ local function finish(player: Player, why: string)
 	local s = sessions[player.UserId]
 	sessions[player.UserId] = nil
 	onboarded[player.UserId] = nil
+	ladderTop[player.UserId] = nil
 	roundSeen[player.UserId] = nil
 	if s == nil then
 		return
@@ -1108,6 +1112,91 @@ function Analytics.moneyEarned(player: Player, amount: number, balance: number?,
 			remoteFields({ source = short(source or "round", 16) })
 		)
 	end)
+end
+
+-- ======================================================= lifetime ladders ==
+--
+-- (2026-10-09, owner: "add a funnel to see what percent of players make it to
+-- rank 5 10 20 and 30. also add a funnel so i can see 90th percentile lifetime
+-- amount of money earned")
+--
+-- TWO LADDERS KEYED BY THE ACCOUNT, NOT THE VISIT: the funnel session is the
+-- user id, so a step counts each player ONCE EVER and every row reads as
+-- "share of players who got this far" against row 1.
+--   eventpass_<id>  1 playing (a profile loaded while the event was live),
+--                   then event pass tier 5 / 10 / 20 / 30 reached.
+--   money_lifetime  1 playing, then Money earned EVER (profile.stats
+--                   .moneyEarned) at or past each rung. THE 90TH PERCENTILE
+--                   is where a row falls through 10% of row 1: it sits between
+--                   the last rung above 10% and the first one below.
+-- Logged from what the PROFILE holds, not at the moment of crossing, on every
+-- profile load and every round payout -- so a tier skip bought on either
+-- server, a credit from any path, and everyone who crossed a rung before this
+-- shipped all land, at the latest on their next load. Roblox counts a repeated
+-- step once; `ladderTop` only keeps this server from re-sending them.
+Analytics.PASS_FUNNEL_PREFIX = "eventpass_"
+Analytics.PASS_TIERS = { 5, 10, 20, 30 }
+Analytics.MONEY_FUNNEL = "money_lifetime"
+Analytics.MONEY_RUNGS = { 1000, 2500, 5000, 10000, 25000, 50000, 100000, 250000, 500000, 1000000, 2500000, 5000000 }
+
+local function rungName(n: number): string
+	if n >= 1000000 then
+		return ("%gm"):format(n / 1000000)
+	end
+	return ("%gk"):format(n / 1000)
+end
+
+-- Logs every step of one ladder from the last one sent here up to `top`, so a
+-- jump of several rungs at once still fills each row it passed.
+local function climb(player: Player, funnelName: string, top: number, names: { string })
+	local seen = ladderTop[player.UserId]
+	if seen == nil then
+		seen = {}
+		ladderTop[player.UserId] = seen
+	end
+	local from = seen[funnelName] or 0
+	if top <= from then
+		return
+	end
+	seen[funnelName] = top
+	local key = tostring(player.UserId)
+	for step = from + 1, top do
+		Analytics.funnel(player, funnelName, key, step, names[step])
+	end
+end
+
+-- `passId` is EventPass.ID, `passLive` EventPass.isLive(), `passTier` the
+-- tiers reached (EventPass.progress), `earned` Data.moneyEarned. Any of them
+-- nil skips that ladder -- a profile that never loaded logs nothing.
+function Analytics.progress(player: Player, passId: string?, passLive: boolean?, passTier: number?, earned: number?)
+	if player.Parent == nil then
+		return
+	end
+	if passId ~= nil and passTier ~= nil then
+		local top = 0
+		if passLive then
+			top = 1
+		end
+		local names = { "playing" }
+		for i, t in Analytics.PASS_TIERS do
+			names[i + 1] = "tier_" .. t
+			if passTier >= t then
+				top = i + 1
+			end
+		end
+		climb(player, Analytics.PASS_FUNNEL_PREFIX .. passId, top, names)
+	end
+	if earned ~= nil then
+		local top = 1
+		local names = { "playing" }
+		for i, r in Analytics.MONEY_RUNGS do
+			names[i + 1] = rungName(r)
+			if earned >= r then
+				top = i + 1
+			end
+		end
+		climb(player, Analytics.MONEY_FUNNEL, top, names)
+	end
 end
 
 -- ================================================================== funnel ==
